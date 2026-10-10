@@ -11,7 +11,7 @@
 //   • MCP knuckle bumps, thumb along the rim's back face lying on the upper spoke
 //   • wrist, cuff and sleeve toward an IK'd elbow (2-bone IK from the shoulder)
 // v0: blue nitrile glove + yellow protective-suit sleeve with an elastic cuff;
-// v1: bare skin + flannel shirt cuff and sleeve.
+// v1: bare skin + the ribbed cuff and baggy sleeve of young Rook's oversized brick-red hoodie (R3-CAB2; was a flannel shirt).
 // ─────────────────────────────────────────────────────────────────────────────
 import * as THREE from 'three';
 import { Kit } from '../models/kit.js';
@@ -26,7 +26,8 @@ export const HAND_STYLE = Object.freeze({
   1: {
     glove: false, base: PAL.skin[1], dorsal: mix(PAL.skin[1], '#c98d64', 0.25), palm: mix(PAL.skin[1], '#f0c6a0', 0.45), side: shade(PAL.skin[1], 0.92),
     knuckle: mix(PAL.skin[1], '#b9785a', 0.4), nail: '#efd2bd',
-    gloveRim: null, cuffBand: ['#7a322a', '#6a2a24'], sleeve: '#9a4034', sleeveD: '#6e2c26', sleeveL: '#a94a3c', seam: '#5e2420',
+    // young Rook's brick-red hoodie (= r3-rook-body.js ROOK_COL: hoodie #a4473a, hoodieD #8c3b31, rib #7a332b)
+    gloveRim: null, cuffBand: ['#7a332b', '#8c3b31'], sleeve: '#a4473a', sleeveD: '#8c3b31', sleeveL: '#b0503f', seam: '#7a332b', hoodie: true,
   },
 });
 
@@ -227,15 +228,17 @@ export function buildHands(ctx) {
     const side = new V3().crossVectors(fUp, F).normalize();
     quad(k, st.seam, sa.clone().addScaledVector(side, -0.002), sa.clone().addScaledVector(side, 0.002), sb.clone().addScaledVector(side, 0.002), sb.clone().addScaledVector(side, -0.002), fUp);
   } else {
-    limb(k, st.cuffBand[0], P(0.03), P(0.085), [0.0362 * S, 0.0305 * S], [0.0385 * S, 0.0328 * S], { seg: 10, up: fUp, capA: true });  // shirt cuff
-    const bt = P(0.055).addScaledVector(fUp, 0.0325 * S);
-    limb(k, '#e8e2cf', bt.clone().addScaledVector(fUp, -0.002), bt.clone().addScaledVector(fUp, 0.0022), [0.0042, 0.0042], [0.0042, 0.0042], { seg: 6, capB: 0.0006 });
-    const fl = (i, part, th) => (Math.sin(th) < -0.4 ? shade(st.sleeve, 0.85) : st.sleeve);
-    limb(k, fl, P(0.085), P(0.12), [0.0385 * S, 0.0328 * S], [0.047, 0.041], { seg: 10, up: fUp });
-    limb(k, st.sleeveD, P(0.12), P(0.132), [0.047, 0.041], [0.0482, 0.0422], { seg: 10, up: fUp });
-    limb(k, fl, P(0.132), P(0.19), [0.0482, 0.0422], [0.051, 0.0445], { seg: 10, up: fUp });
-    limb(k, st.sleeveD, P(0.19), P(0.204), [0.051, 0.0445], [0.0518, 0.0452], { seg: 10, up: fUp });
-    limb(k, fl, P(0.204), P(sleeveLen + 0.02), [0.0518, 0.0452], [0.056, 0.049], { seg: 10, up: fUp });
+    // oversized hoodie: a ribbed knit cuff that creeps over the wrist, then a baggy sleeve
+    // with a slack puff above the cuff and two soft folds toward the elbow
+    const rib = (i) => (i % 2 ? st.cuffBand[1] : st.cuffBand[0]);
+    limb(k, rib, P(0.016), P(0.064), [0.0338 * S, 0.0268 * S], [0.0378 * S, 0.031 * S], { seg: 12, up: fUp, capA: true });
+    const sh = (i, part, th) => (Math.sin(th) > 0.55 ? st.sleeveL : Math.sin(th) < -0.35 ? st.sleeveD : st.sleeve);
+    const B = [[0.063, 0.0378 * S, 0.031 * S], [0.085, 0.0545, 0.0478], [0.114, 0.0578, 0.0508], [0.126, 0.0548, 0.048],
+      [0.19, 0.0612, 0.0538], [sleeveLen + 0.02, 0.0655, 0.0578]];
+    for (let i = 0; i < B.length - 1; i++) {
+      const [a, ra, rb] = B[i], [b, sa, sb] = B[i + 1];
+      limb(k, i === 2 ? st.sleeveD : sh, P(a), P(b), [ra, rb], [sa, sb], { seg: 10, up: fUp });
+    }
   }
 
   const mesh = bake(k, null, material, 'hand_l_mesh', { smooth: 66, cast: false });

@@ -9,21 +9,26 @@ const cab = createModel('rv_cab_fp_r3', wearingSuit ? 0 : 1);   // instead of cr
 | Variant | Hands |
 |---|---|
 | v0 | Blue nitrile gloves (lighter knuckles), yellow protective-suit sleeves with an elastic cuff |
-| v1 | Bare hands with fingernails, flannel shirt cuffs and sleeves |
+| v1 | Bare hands with fingernails, the ribbed cuffs and baggy sleeves of young Rook's oversized brick-red hoodie (was flannel) |
 
-## Files (all owned by R3-CAB)
+> **Revision R3-CAB2** (after the user's feedback: *"add the haiwan girl on front window that jiggles as car goes and also the mint refresheer and the coffee and some other elements"*): a new spring-mounted hula dancer on the dash, a mint pine-tree freshener and fuzzy dice on the rear-view mirror, all animated by a small spring/pendulum helper (`render/fp/trinkets.js`), a more lived-in dash, and hoodie cuffs on v1. See [R3-CAB2: dash trinkets](#r3-cab2-dash-trinkets) below.
+
+## Files (owned by R3-CAB, revised by R3-CAB2)
 
 | File | What |
 |---|---|
-| `public/js/assets/expansion/r3-cab.js` | `PACK`: builder (2 variants), category `x_round3`, label, named parts. |
-| `public/js/assets/expansion/r3-cab-model.js` | The builder: shell, dashboard, binnacle, column, wheel, horn pad, stalks, key, wipers, mirrors, userData. |
-| `public/js/assets/expansion/r3-cab-hands.js` | The hands: fingers that wrap the rim, palm, thumb, wrist, cuff, sleeve, and the arm IK. |
+| `public/js/assets/expansion/r3-cab.js` | `PACK`: builder (2 variants), category `x_round3`, label, named parts (now including the six trinket pivots). |
+| `public/js/assets/expansion/r3-cab-model.js` | The builder: shell, dashboard, binnacle, column, wheel, horn pad, stalks, key, wipers, mirrors, userData. Calls the trinket builders. |
+| `public/js/assets/expansion/r3-cab-hands.js` | The hands: fingers that wrap the rim, palm, thumb, wrist, cuff, sleeve, and the arm IK. v1 now has hoodie cuffs. |
+| `public/js/assets/expansion/r3-cab-trinkets.js` | **R3-CAB2, new.** The hula dancer, the mint freshener and the fuzzy dice (animated pivots), plus the static dash clutter baked into the body (`dashLife`, `visorSlips`). Placements live in `TRINKETS`. |
 | `public/js/assets/expansion/r3-cab-geo.js` | Geometry helpers: oriented limbs, a bumpy torus, textured decals baked into the same mesh, and smooth normals with a crease angle. |
-| `public/js/assets/expansion/r3-cab-atlas.js` | One 1024×512 CanvasTexture holding every printed detail. In node (no DOM) the meshes fall back to plain vertex colours. |
-| `public/r3-cab-preview.html` | The proof page that produced the renders. |
-| `docs/r3/cab-*.png` | The renders. |
+| `public/js/assets/expansion/r3-cab-atlas.js` | One 1024×512 CanvasTexture holding every printed detail (R3-CAB2 added the freshener print, dice faces, toll ticket, parking stub, phone screen, gum wrapper and polaroid in free cells). In node (no DOM) the meshes fall back to plain vertex colours. |
+| `public/js/render/fp/trinkets.js` | **R3-CAB2, new, not wired.** `Trinkets`: damped springs and pendulums that animate the trinket pivots from acceleration, lateral acceleration and bumps. |
+| `public/js/assets/test/check-assets.js` | One line: `rv_cab_fp_r3: 7000` in `BUDGET_OVERRIDE` (the x_ default is 6000). |
+| `public/r3-cab-preview.html` | The proof page that produced the renders (R3-CAB2 added the scripted drive, the garage scene, traffic and close-up presets). |
+| `docs/r3/cab-*.png`, `docs/r3/cab2-*`, `docs/r3/bg-cab-*.png` | The renders. |
 
-Nothing else was modified. `hazards-cab.js` is only imported, for `CAB` and `GAUGES`.
+Nothing else was modified. `hazards-cab.js` is only imported, for `CAB` and `GAUGES`. Game wiring (`main.js`, `FirstPersonDriver.js`, `sim/*`) and today's `rv_cab_fp` are untouched.
 
 ## What changed compared with `rv_cab_fp`
 
@@ -69,12 +74,80 @@ Nothing else was modified. `hazards-cab.js` is only imported, for `CAB` and `GAU
 - the driver's visor, lowered, with a folded three-panel road map tucked under its strap (visible top-left)
 - a toe board under the dash, so no daylight shows through when you look down
 
-**Kept as today:** the side and centre mirrors (same planes, positions and placeholder material), the wipers and their mounts, the A-pillars, header, headliner, doors, passenger seat and the pine freshener.
+**Kept as today:** the side and centre mirrors (same planes, positions and placeholder material), the wipers and their mounts, the A-pillars, header, headliner, doors and passenger seat. (R3-CAB2 replaced the static pine freshener with the animated mint one, and brought the hula figure back as a new, animated design.)
 
 **Removed:**
-- the hula figure and the visor photo
+- the visor photo (a polaroid now sits on the binnacle instead)
 - Rook's own seat back, because it is behind the camera (only the cushion front remains)
 - some invisible chamfers, to stay within the triangle budget
+
+## R3-CAB2: dash trinkets
+
+Everything below is in `r3-cab-trinkets.js`. All marks are original (no real brands).
+
+**Hula dancer** on the dash top, right of the binnacle, standing against the windscreen (`TRINKETS.hula`: RV-local [0.182, 1.497, 3.095], turned 0.3 rad toward Rook, built 1.3× life size so she reads from the eye, about 22 cm tall). She is a chain of four pivots:
+
+| Pivot | Parent | Mesh | Motion |
+|---|---|---|---|
+| `hula` | `rv_frame` | none (its wooden base is baked into the body mesh) | fixed anchor; `rotation.y` = facing |
+| `hula_spring` | `hula` | the coil spring, a wooden puck, legs and feet, torso, coconut-shell top, flower lei, head with hair and face, long hair and two side locks, a red hibiscus over her right ear | tilts: `rotation.x > 0` leans forward (+Z), `rotation.z > 0` leans to Rook's right (−X) |
+| `hula_hips` | `hula_spring` (at the waist) | the grass skirt: an inner cone, 18 layered blades with a ragged hem, a straw waistband | sways opposite the torso (`.x`, `.z`) and swivels (`.y`) |
+| `hula_arms` | `hula_spring` (at the shoulders) | both arms raised: her right curls up beside the flower, her left waves out to the side | lags the torso (`.x`, `.z`) |
+
+All four use Euler order `XZY` and rest at identity rotation (except the anchor's facing yaw).
+
+**Mint pine-tree freshener** (`freshener`): a cut-out card printed on both sides (mint gradient, needle chevrons, "FRESH MINT" label band), hanging on a 5 cm string from the bottom edge of the rear-view mirror, turned to face Rook. It is a pendulum about the hanging point: `rotation.x > 0` swings it toward Rook (−Z), `rotation.z > 0` toward +X, and `rotation.y` twists it about the string (order `XZY`).
+
+**Fuzzy dice** (`dice`): a pair of plush pink dice (chamfered cores with smooth normals, speckled fuzz and white pips from the atlas) on one loop next to the freshener. Same pendulum convention.
+
+**More dash life** (static, baked into the body mesh, no extra draw calls):
+- the dash caddy, moved right, now holds the to-go coffee (kept) and a phone in a spring-clip holder showing a nav screen ("0.3 mi Main St")
+- folded aviator sunglasses, lying by the glass next to the dancer
+- a pack of "COOL MINT GUM" with one stick sliding out
+- a crumpled receipt
+- a toll ticket and a parking stub tucked under the visor strap, next to the folded map
+- the "Road Mix '86" cassette, now loose at the front edge (the second cassette stays in its clear case further right)
+- a polaroid (the RV at sunset) tucked into the top-left corner of the binnacle hood
+
+The centre of the windscreen stays clear: the dancer and the caddy sit below the road on the right, and the dice and freshener hang in the top-right corner under the mirror, where the old pine tree was.
+
+**v1 hoodie cuffs.** v1's flannel became young Rook's oversized hoodie: a 12-rib knit cuff that creeps over the wrist, a slack puff above it, then a baggy sleeve with a soft fold toward the elbow. The colours match `rook_young` (`r3-rook-body.js` `ROOK_COL`): hoodie `#a4473a`, the darker shade `#8c3b31` and rib `#7a332b`. They are copied into `HAND_STYLE[1]` in `r3-cab-hands.js`, not imported, so the cab does not depend on R3-ROOK's file. Update both together if the character's colour changes. v0 (nitrile gloves and yellow suit cuffs) is unchanged.
+
+### Trinkets: the jiggle (`render/fp/trinkets.js`)
+
+`Trinkets` is self-contained (no imports, deterministic, no per-frame allocation). It finds the pivots by name and skips any that are missing, so it is a no-op on `rv_cab_fp`.
+
+- **Inputs, per frame, in the RV frame:** `speed` (m/s), `accel` (optional, m/s²), `latAcc`, and `bump`.
+  - **`accel`:** + = speeding up. Without it, `Trinkets` uses the derivative of `speed`, smoothed over 0.06 s.
+  - **`latAcc`:** `snap.feel.latAcc`. + means the RV accelerates toward its left (+X), i.e. a left turn. Things swing to the outside.
+  - **`bump`:** `snap.feel.bump`. Its rising edge kicks everything.
+- **Hula spring:** the dancer is a damped spring at about 2.2 Hz (ζ 0.14, `TRINKET_TUNING`). Inertia leans her away from the acceleration, then she wobbles back with some overshoot and settles in about 1.5 s. A hard stop leans her about 0.3–0.5 rad.
+  - **Hips:** follow −0.9 × her tilt through a stiffer spring, so the skirt sways opposite, a little late. They also swivel when she wobbles.
+  - **Arms:** follow −0.45 × her tilt through a soft spring, so they lag and then overshoot.
+  - **Road buzz:** at speed, a tiny buzz keeps her alive.
+- **Freshener and dice:** 2-axis pendulums. Their lengths come from `cab.userData.trinkets` (0.082 m and 0.077 m, about 1.7 Hz), with air damping that settles them in about 1.5 s (to 10 %), plus a torsion twist about the string.
+  - **Braking** swings them toward the windscreen (−8.4 m/s² gives about 0.8–0.9 rad).
+  - **Turning right** swings them left (+X).
+  - **The glass:** the forward swing is capped at about 0.9 rad, where the windscreen is, and they bounce off it.
+- **Rotated parents:** each pivot's parent may be rotated, e.g. the dancer's anchor faces Rook. The acceleration is turned into the parent's frame, so the trinkets can be moved or re-aimed freely.
+- **Other calls:** `kick(strength)` for crashes and landings, `reset()` for teleports.
+
+**FirstPersonDriver recipe**, once the kind string is switched to `rv_cab_fp_r3`:
+
+```js
+import { Trinkets } from './trinkets.js';
+// _build(), after createModel(...):
+this.trinkets = new Trinkets(cab);                 // harmless on rv_cab_fp (no trinket pivots → no-op)
+// _animateCab(dt, snap, rv) — once per frame, next to the wheel/gauges:
+const feel = snap.feel || {};
+this.trinkets.update(dt, { speed: rv.speed || 0, latAcc: feel.latAcc || 0, bump: feel.bump || 0 });
+// _onEvent(ev):
+//   EV.CRASH  → this.trinkets.kick(0.5 + Math.min(1, ev.power ?? 0.6) * 0.6);
+//   EV.LANDED → this.trinkets.kick(ev.hard ? 1.2 : 0.6);
+// on a teleport / reset (rv.z jumps) or when the garage phase ends: this.trinkets.reset();
+```
+
+The snapshot has no longitudinal acceleration, so leave `accel` out and let `Trinkets` differentiate `rv.speed`. On the cook's client the snapshots are interpolated, and the 0.06 s smoothing absorbs the steps. It costs five pivots and a few dozen multiplies per frame, so it can run even while the cab is hidden.
 
 ## Contract and named parts
 
@@ -98,6 +171,12 @@ Nothing else was modified. `hazards-cab.js` is only imported, for `CAB` and `GAU
 | **`gear_pointer`** | `gauges` | `rotation.z`: P 0.24 (authored), R 0.12, N 0, D −0.12, L −0.24 | `gearbox.gear`: −1 → R, 1–3 → D (or L in gear 1 below about 8 mph if you like), engine off or garage → P. Damp it. |
 | **`key`** | `key_mount` | `rotation.z`: 0 off, 0.62 run (authored), 1.05 start | `garage.items.engine`: off → 0, cranking → 1.05, on → 0.62 |
 | **`lamp_check`, `lamp_oil`, `lamp_heat`** | `gauges` (meshes) | `material.emissiveIntensity`: 0 off → about 1.3 on, after `cloneInstanceMaterials(cab)` | see below |
+| **`hula`** | `rv_frame` | fixed anchor (`rotation.y` = facing); its base is in the body mesh | — |
+| **`hula_spring`** | `hula` | `rotation.x` / `.z` tilt (order XZY) | `Trinkets` |
+| **`hula_hips`**, **`hula_arms`** | `hula_spring` | `rotation.x` / `.z` (hips also `.y`) | `Trinkets` |
+| **`freshener`**, **`dice`** | `rv_frame` | pendulum `rotation.x` / `.z`, twist `.y` (order XZY) | `Trinkets` |
+
+`userData.trinkets` holds the pivot names, the dancer's spring height and the pendulum lengths for `Trinkets`. `userData.controls.trinkets` points at the driver.
 
 Lamp ideas, all from the snapshot:
 - **Bulb check:** all three lamps on while `garage.items.engine === 'cranking'`.
@@ -109,17 +188,25 @@ The lamps use a Lambert material with `map` = `emissiveMap` = the atlas, like ve
 
 ## Budgets
 
-The asset check (`node public/js/assets/test/check-assets.js`) passes: **ALL OK** (215 kinds, 387 variants).
+The asset check (`node public/js/assets/test/check-assets.js`) passes: **ALL OK** (239 kinds, 432 variants at the time of R3-CAB2). `rv_cab_fp_r3` has its own budget line, `BUDGET_OVERRIDE.rv_cab_fp_r3 = 7000`; the expansion default is 6,000.
 
 | Variant | Triangles | Meshes (draw calls) |
 |---|---|---|
 | `rv_cab_fp` (today) | 4,225 | 12 |
-| `rv_cab_fp_r3` v0 (gloves) | 5,553 | 20 |
-| `rv_cab_fp_r3` v1 (bare) | 5,577 | 20 |
+| `rv_cab_fp_r3` v0 (gloves), R3-CAB | 5,553 | 20 |
+| `rv_cab_fp_r3` v1 (bare), R3-CAB | 5,577 | 20 |
+| **`rv_cab_fp_r3` v0 (gloves), R3-CAB2** | **6,782** | **25** |
+| **`rv_cab_fp_r3` v1 (bare, hoodie), R3-CAB2** | **6,782** | **25** |
 
-By mesh: body 2,960, wheel 864, hands 2 × 544 (v1: 2 × 556), key 182, horn pad 148, stalks 68 + 84, wipers 2 × 60, needles, pointer and lamps 33, and 2 triangles for each mirror plane.
+By mesh (R3-CAB2):
+- body 3,246 (it was 2,960; it now also holds the dancer's base and the dash clutter)
+- wheel 864, hands 2 × 544 (both variants), key 182, horn pad 148, stalks 68 + 84, wipers 2 × 60
+- needles, pointer and lamps 33, and 2 triangles for each mirror plane
+- trinkets: `hula_spring` 579, `hula_hips` 80, `hula_arms` 84, `freshener` 38, `dice` 162
 
-**The 16-mesh target was not met: 20 meshes is the floor of this spec.**
+The trinkets add **5 draw calls** (20 → 25). The `hula` anchor has no mesh of its own, because its base is baked into the body. Each animated pivot carries exactly one merged mesh.
+
+**The 16-mesh target was not met: 20 meshes is the floor of R3-CAB's spec (25 with the trinkets).**
 - The `rv_cab_fp` contract already needs 12 separate meshes: body, wheel, two hands, three needles, two wipers and three mirror planes.
 - The brief adds 8 more that it asks to be separate: 5 animatable pivots, each holding its own mesh, and 3 lamp meshes with their own emissive materials.
 
@@ -172,8 +259,16 @@ All printed details share the atlas, so text costs no extra draw calls.
 | `world=0` | Plain backdrop without WorldView |
 | `mirrors=0` | Disables live mirrors |
 | `shot=1` | Hides the caption |
+| `sim=brakebump` | **R3-CAB2.** A scripted 4 s drive that starts and ends at rest: cruise at 13 m/s, a hard brake (−8.4 m/s², 0.2–1.15 s), roll on at 5 m/s, a bump at 1.9 s. It drives the real `Trinkets` at a fixed 1/120 s step and FirstPersonDriver's head bob. The RV moves along the road. |
+| `t` | With `sim`: pre-roll the drive to this time (stills). The springs settle from −1.6 s first. |
+| `scene=garage` | The RV parked on its bay in Rook's Garage (`garage_interior` at `sim/garage.js` `garageFrame`, roll-up door open, GarageView's interior lights, exterior hidden). |
+| `traffic=1` | A few cars in both directions and pedestrians on the sidewalks. |
+| `scene=defend` | The RV stopped (speed 0) with two police cars pulled up close ahead at different angles (entity state 1, so their light bars flash) and onlookers on the sidewalks. `copA`, `copB` set their distances ahead (9.5 m and 15.5 m by default). |
+| `cam=trinkets`, `hula`, `mirror` | Close-ups of the dash toys. |
+| `lane` | The RV's lane (default: the inner forward lane). |
+| `hulaX`, `hulaZ`, `swing` | Static trinket poses for detail shots. |
 
-`window.__cab.done` turns true when the frame is settled.
+`window.__cab.done` turns true when the frame is settled. `window.__cab.advance(dt)` steps the scripted drive and draws one frame. That is how the GIF frames are made: one screenshot, then `advance(1/12)`, 48 times.
 
 Renders are 1280×720, made with Playwright and SwiftShader (each takes about 10 s):
 
@@ -186,8 +281,24 @@ Renders are 1280×720, made with Playwright and SwiftShader (each takes about 10
 | `docs/r3/cab-turn.png` | v0, wheel at 90° right, proposed slide recipe. |
 | `docs/r3/cab-turn-fp-today.png` | v0, wheel at 90°, FirstPersonDriver's current −0.5 recipe. |
 | `docs/r3/cab-dash.png` | 2×2 detail sheet: binnacle with lamps lit and PRNDL in D; centre stack; CB under the dash; key and "Co" fob. |
+| `docs/r3/cab2-gloves.png` | **R3-CAB2.** v0 from the eye on a downtown street (z 5000, traffic): the hula dancer, dice, freshener and dash clutter. |
+| `docs/r3/cab2-bare.png` | **R3-CAB2.** The same view with v1: bare hands and hoodie cuffs. |
+| `docs/r3/cab2-trinkets.png` | **R3-CAB2.** Close-up of the dash toys mid-wobble, 0.2 s after the bump (`cam=trinkets&sim=brakebump&t=2.12`). |
+| `docs/r3/cab2-jiggle.gif` | **R3-CAB2.** 4 s loop, 960×540, 12 fps, 48 frames, 5.1 MB: driver's view on a downtown street, hard brake then a bump. The dice and freshener fling toward the glass and swing back, and the dancer wobbles with her skirt counter-swaying. Everything settles before the loop restarts. |
+| `docs/r3/bg-cab-city.png` | **R3-CAB2.** CLEAN 1280×720 background for UI mockups: v1 hands, wheel straight, downtown (z 4930), light traffic, no overlays. |
+| `docs/r3/bg-cab-garage.png` | **R3-CAB2.** CLEAN 1280×720 background: v1, the RV parked in Rook's Garage looking out of the open roll-up door at the road, no overlays. |
+| `docs/r3/bg-cab-defend.png` | **R3-CAB2.** CLEAN 1280×720 background: v1, wheel straight, the RV stopped downtown (z 4930) with two police cruisers pulled up close ahead at different angles, light bars on, trinkets visible, no overlays (`scene=defend`). |
+
+How the R3-CAB2 renders were made: Playwright, headless Chromium with SwiftShader, the server on `:3100`. Stills use `r3-cab-preview.html?…&shot=1`. The GIF frames are rendered at 1280×720 and assembled with ffmpeg (`palettegen stats_mode=diff`, `paletteuse` bayer dither, Lanczos downscale to 960×540).
 
 ## Known limits
+
+R3-CAB2:
+- **Forward lean.** The dancer's lean under braking points along Rook's line of sight, so from the eye it reads as a dip. Bumps, turns and her hip sway read best. The dice and freshener carry the braking.
+- **Body pitch.** `Trinkets` ignores the RV's body pitch and roll (only accelerations and bumps). The nose dive under braking is already in the camera.
+- **Clutter stays put.** The clutter is static, baked into the body. Only the dancer, the freshener and the dice move.
+
+R3-CAB:
 
 - The grip is at about 9:30 and 2:30, not exactly 9 and 3, for on-screen visibility (see above).
 - The sleeves are rigid with their hand pivot. Very large wheel angles under the −0.5 recipe swing them; the slide recipe avoids this.

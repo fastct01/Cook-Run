@@ -2,7 +2,9 @@
 // Round 3 cab (agent R3-CAB) — one 1024×512 CanvasTexture for every printed detail of the
 // redesigned cab: gauge faces (numerals, minor ticks, red zone), PRNDL strip, radio dial, warning
 // lamp legends, horn badge, key fob, rim stitching, cassette labels, CB faceplate, HVAC panel and the
-// folded road map. All text and marks are original (no real brands). Without a DOM (node asset
+// folded road map; R3-CAB2 added the mint pine-freshener print (TREE outline), six fuzzy dice faces,
+// a toll ticket + parking stub, the phone's nav screen, the gum wrapper and the polaroid, in cells the
+// original layout left free. All text and marks are original (no real brands). Without a DOM (node asset
 // check) cabAtlas() returns null and the meshes fall back to plain vertex colours.
 // ─────────────────────────────────────────────────────────────────────────────
 import * as THREE from 'three';
@@ -17,7 +19,17 @@ export const RECT = Object.freeze({
   prndl: [640, 160, 256, 48], radio: [640, 208, 384, 80],
   cassA: [0, 256, 192, 120], cassB: [192, 256, 192, 120], cb: [384, 256, 256, 96], hvac: [384, 352, 256, 96],
   map: [640, 288, 320, 224], white: [960, 448, 64, 64],
+  // R3-CAB2 dash life (free cells of the original layout)
+  fresh: [0, 376, 96, 136], ticket: [96, 376, 64, 104], ticket2: [160, 376, 64, 104],
+  die1: [896, 80, 42, 42], die2: [938, 80, 42, 42], die3: [980, 80, 42, 42],
+  die4: [896, 122, 42, 42], die5: [938, 122, 42, 42], die6: [980, 122, 42, 42],
+  phone: [384, 448, 128, 64], gum: [512, 448, 128, 32], photo: [960, 288, 64, 80],
 });
+/** Pine-tree air-freshener silhouette, normalised (u → right, v → up); shared by the print and the cut-out geometry. */
+export const TREE = Object.freeze([
+  [0.5, 1.0], [0.75, 0.76], [0.63, 0.76], [0.87, 0.52], [0.71, 0.52], [1.0, 0.25], [0.59, 0.25], [0.59, 0.03],
+  [0.41, 0.03], [0.41, 0.25], [0.0, 0.25], [0.29, 0.52], [0.13, 0.52], [0.37, 0.76], [0.25, 0.76],
+]);
 /** uv rect [u0, v0, u1, v1] (v = 0 at the canvas bottom), inset by `pad` px. */
 export function uvOf(name, pad = 1) {
   const [x, y, w, h] = RECT[name];
@@ -284,4 +296,92 @@ function draw(ctx) {
     ctx.strokeStyle = '#c4372b'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(222, 110, 15, 0, Math.PI * 2); ctx.stroke();   // circled stop
   });
 
+  drawDashLife(ctx);
+}
+
+// ── R3-CAB2: mint freshener print, fuzzy dice faces, toll/parking slips, phone nav screen, gum, polaroid ──
+function seeded(seed) { let s = seed >>> 0; return () => { s = (s + 0x6d2b79f5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function drawDashLife(ctx) {
+  // mint pine-tree freshener (both faces print the same): mint gradient, darker cut edge, label band
+  clip(ctx, RECT.fresh, (w, h) => {
+    const P = TREE.map(([u, v]) => [u * w, (1 - v) * h]);
+    const path = () => { ctx.beginPath(); P.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.closePath(); };
+    ctx.fillStyle = '#4fbf8f'; ctx.fillRect(0, 0, w, h);
+    const g = ctx.createLinearGradient(0, 0, 0, h); g.addColorStop(0, '#c9f7e2'); g.addColorStop(0.55, '#8ee6bd'); g.addColorStop(1, '#5fd0a0');
+    ctx.fillStyle = g; path(); ctx.fill();
+    ctx.save(); path(); ctx.clip();
+    ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 2;              // needle chevrons
+    for (const [y, s] of [[h * 0.2, 0.18], [h * 0.42, 0.26], [h * 0.64, 0.34]]) {
+      ctx.beginPath(); ctx.moveTo(w * (0.5 - s), y + h * 0.08); ctx.lineTo(w * 0.5, y); ctx.lineTo(w * (0.5 + s), y + h * 0.08); ctx.stroke();
+    }
+    ctx.fillStyle = '#f4fbf6'; ctx.fillRect(0, h * 0.62, w, h * 0.115);          // label band
+    ctx.fillStyle = '#1f7a52'; ctx.font = `900 11px ${COND}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('FRESH MINT', w / 2, h * 0.68);
+    ctx.restore();
+    ctx.strokeStyle = '#2f9a6c'; ctx.lineWidth = 5; ctx.lineJoin = 'round'; path(); ctx.stroke();
+  });
+  // fuzzy dice: plush pink faces with white pips (speckled fuzz, darker towards the edges)
+  const PIPS = { 1: [[0.5, 0.5]], 2: [[0.27, 0.27], [0.73, 0.73]], 3: [[0.25, 0.25], [0.5, 0.5], [0.75, 0.75]],
+    4: [[0.27, 0.27], [0.73, 0.27], [0.27, 0.73], [0.73, 0.73]], 5: [[0.25, 0.25], [0.75, 0.25], [0.5, 0.5], [0.25, 0.75], [0.75, 0.75]],
+    6: [[0.27, 0.22], [0.73, 0.22], [0.27, 0.5], [0.73, 0.5], [0.27, 0.78], [0.73, 0.78]] };
+  for (let n = 1; n <= 6; n++) clip(ctx, RECT['die' + n], (w, h) => {
+    const rnd = seeded(91 + n * 7);
+    ctx.fillStyle = '#d93b62'; ctx.fillRect(0, 0, w, h);
+    for (let i = 0; i < 340; i++) { ctx.fillStyle = rnd() < 0.5 ? 'rgba(255,150,178,.55)' : 'rgba(120,10,40,.45)'; ctx.fillRect(rnd() * w, rnd() * h, 1 + rnd() * 1.6, 1 + rnd() * 1.6); }
+    const v = ctx.createRadialGradient(w / 2, h / 2, w * 0.2, w / 2, h / 2, w * 0.72); v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(90,0,25,.45)');
+    ctx.fillStyle = v; ctx.fillRect(0, 0, w, h);
+    for (const [u, q] of PIPS[n]) {
+      ctx.fillStyle = 'rgba(110,10,35,.5)'; ctx.beginPath(); ctx.arc(u * w + 0.8, q * h + 1, 5.2, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#fbf6ef'; ctx.beginPath(); ctx.arc(u * w, q * h, 4.6, 0, Math.PI * 2); ctx.fill();
+    }
+  });
+  // toll ticket + parking stub (tucked against the bottom of the windscreen)
+  const slip = (rect, bg, lines, big) => clip(ctx, rect, (w, h) => {
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = 'rgba(60,50,40,.35)'; for (let x = 3; x < w; x += 5) ctx.fillRect(x, 4, 2, 2);   // perforation
+    lines.forEach(([t, px, y, col], i) => label(ctx, t, w / 2, y, px, col || '#2a2622', '800', COND));
+    if (big) label(ctx, big, w / 2, h * 0.6, 20, '#b3271d', '900', COND);
+    ctx.fillStyle = '#2a2622'; let x = 8; const rnd = seeded(rect[0] + 3);
+    while (x < w - 8) { const bw = 1 + Math.floor(rnd() * 3); ctx.fillRect(x, h - 22, bw, 14); x += bw + 1 + Math.floor(rnd() * 2); }
+  });
+  slip(RECT.ticket, '#f3efe3', [['TOLL', 18, 18], ['I-9 PLAZA 4', 9, 34], ['CLASS 3', 9, 46], ['$2.75', 16, 62, '#1d4f8a'], ['THANK YOU', 8, 76]], null);
+  slip(RECT.ticket2, '#f2e39a', [['PARK', 18, 18], ['LOT B · 07:42', 8, 34]], '0412');
+  // phone nav screen (landscape): dark map, blue route, turn banner, ETA strip
+  clip(ctx, RECT.phone, (w, h) => {
+    ctx.fillStyle = '#1e2633'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#263243'; for (const [x, y, bw, bh] of [[8, 22, 30, 16], [46, 18, 26, 22], [84, 24, 36, 14], [12, 44, 40, 12], [62, 46, 22, 10]]) ctx.fillRect(x, y, bw, bh);
+    ctx.strokeStyle = '#41506a'; ctx.lineWidth = 3;
+    for (const [a, b, c, d] of [[0, 42, w, 40], [40, 14, 44, h], [80, 14, 78, h], [0, 20, w, 22]]) { ctx.beginPath(); ctx.moveTo(a, b); ctx.lineTo(c, d); ctx.stroke(); }
+    ctx.strokeStyle = '#3f8cff'; ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.beginPath(); ctx.moveTo(60, h); ctx.lineTo(60, 41); ctx.lineTo(110, 39); ctx.lineTo(126, 39); ctx.stroke();
+    ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(60, 52, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#3f8cff'; ctx.beginPath(); ctx.moveTo(60, 48); ctx.lineTo(63.5, 55); ctx.lineTo(60, 53.4); ctx.lineTo(56.5, 55); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#1d8a50'; ctx.fillRect(0, 0, w, 15);
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2.4; ctx.beginPath(); ctx.moveTo(8, 12); ctx.lineTo(8, 5); ctx.lineTo(15, 5); ctx.stroke();
+    ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.moveTo(18, 5); ctx.lineTo(14, 2); ctx.lineTo(14, 8); ctx.closePath(); ctx.fill();
+    ctx.font = `800 10px ${SANS}`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText('0.3 mi  Main St', 24, 8);
+    ctx.fillStyle = 'rgba(10,14,20,.85)'; ctx.fillRect(0, h - 11, w, 11);
+    ctx.fillStyle = '#9fe0b4'; ctx.font = `700 8px ${SANS}`; ctx.fillText('12 min · 4.1 mi', 6, h - 5.5);
+  });
+  // gum pack wrapper
+  clip(ctx, RECT.gum, (w, h) => {
+    ctx.fillStyle = '#f6f8f4'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#2fae6e'; ctx.fillRect(0, 0, w, 7); ctx.fillRect(0, h - 7, w, 7);
+    ctx.fillStyle = '#9fe3c0'; ctx.fillRect(0, 7, w, 2); ctx.fillRect(0, h - 9, w, 2);
+    label(ctx, 'COOL MINT GUM', w / 2, h / 2 + 1, 13, '#1d6b45', '900', COND);
+  });
+  // polaroid: the RV at sunset, two tiny figures, marker caption
+  clip(ctx, RECT.photo, (w, h) => {
+    ctx.fillStyle = '#f2efe6'; ctx.fillRect(0, 0, w, h);
+    const px = 5, py = 5, pw = w - 10, ph = 52;
+    const g = ctx.createLinearGradient(0, py, 0, py + ph); g.addColorStop(0, '#f08a4b'); g.addColorStop(0.5, '#f7c27a'); g.addColorStop(0.62, '#e3a35e'); g.addColorStop(1, '#b8743e');
+    ctx.fillStyle = g; ctx.fillRect(px, py, pw, ph);
+    ctx.fillStyle = '#ffe2a0'; ctx.beginPath(); ctx.arc(px + pw * 0.75, py + ph * 0.42, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#8a4a3a'; ctx.beginPath(); ctx.moveTo(px, py + ph * 0.6); ctx.lineTo(px + 14, py + ph * 0.42); ctx.lineTo(px + 26, py + ph * 0.6); ctx.fill();
+    ctx.fillStyle = '#efe8d8'; ctx.fillRect(px + 8, py + 30, 30, 13); ctx.fillStyle = '#3f8f88'; ctx.fillRect(px + 8, py + 38, 30, 4);
+    ctx.fillStyle = '#5a6a72'; ctx.fillRect(px + 12, py + 32, 6, 4); ctx.fillRect(px + 22, py + 32, 10, 4);
+    ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(px + 14, py + 44, 2.2, 0, Math.PI * 2); ctx.arc(px + 32, py + 44, 2.2, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#2a2a2a'; ctx.fillRect(px + 42, py + 34, 3, 10); ctx.fillStyle = '#e8d9b8'; ctx.fillRect(px + 47, py + 33, 3, 11);
+    ctx.strokeStyle = '#3a3fa0'; ctx.lineWidth = 1.4; ctx.beginPath(); ctx.moveTo(10, 66); ctx.bezierCurveTo(18, 62, 22, 72, 30, 66); ctx.bezierCurveTo(36, 62, 42, 71, 52, 65); ctx.stroke();
+  });
 }

@@ -14,8 +14,11 @@
 //   gear_pointer  child of gauges       rotation.z P 0.24 (authored) · R 0.12 · N 0 · D −0.12 · L −0.24 (CCW = +, like the needles)
 //   lamp_check, lamp_oil, lamp_heat  meshes under gauges with their own emissive lamp materials
 //                 (perInstanceMaterials → cloneInstanceMaterials(cab).lamp_oil.emissiveIntensity = 1.3)
+//   R3-CAB2 (r3-cab-trinkets.js): hula (anchor; base baked into the body) → hula_spring → hula_hips / hula_arms,
+//                 freshener, dice — spring / pendulum pivots driven by render/fp/trinkets.js (userData.trinkets)
 // Draw calls: body + wheel + horn_pad + 2 hands + 3 needles + gear_pointer + 3 lamps + 2 stalks + key
-//             + 2 wipers + 3 mirror planes = 20 (rv_cab_fp: 12). ~5.55k tris per variant. userData.controls lists all of this.
+//             + 2 wipers + 3 mirror planes = 20, + hula_spring, hula_hips, hula_arms, freshener, dice = 25 (rv_cab_fp: 12).
+//             ~6.6k tris per variant. userData.controls lists all of this.
 // Printed details (gauge faces, PRNDL, radio dial, lamp legends, badge, fob, stitching, tapes, CB, map) come from
 // one CanvasTexture atlas (r3-cab-atlas.js) multiplied with vertex colours, so they cost no extra draw calls.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -27,6 +30,7 @@ import { CAB, GAUGES } from './hazards-cab.js';
 import { V, V3, M4, inFrame, basis, frameAB, quad, bar, limb, torus, Decals, bake } from './r3-cab-geo.js';
 import { cabAtlas, uvOf, WHITE_UV } from './r3-cab-atlas.js';
 import { buildHands } from './r3-cab-hands.js';
+import { addTrinkets, dashLife, visorSlips, TRINKETS } from './r3-cab-trinkets.js';
 
 const FY = 0.72;
 const R = CAB.rim;             // 0.21 → 42 cm wheel
@@ -250,6 +254,9 @@ export function buildRvCabFpR3(variant = 0) {
     });
   });
 
+  // ── R3-CAB2 trinkets: hula dancer on the dash (base baked into the body), mint freshener + fuzzy dice on the mirror ──
+  addTrinkets(F, k, M);
+
   F.add(bake(k, dk, M.body, 'body', { whiteUV: WHITE_UV, cast: false }));
 
   // ── steering wheel `wheel` (+ horn_pad, hands) ─────────────────────────
@@ -400,6 +407,14 @@ export function buildRvCabFpR3(variant = 0) {
     key: { prop: 'rotation.z', off: 0, run: R3.keyRun, start: 1.05, note: 'ring + fob hang plumb at run' },
     gear_pointer: { prop: 'rotation.z', P: 2 * R3.gearStep, R: R3.gearStep, N: 0, D: -R3.gearStep, L: -2 * R3.gearStep },
     lamps: { names: ['lamp_check', 'lamp_oil', 'lamp_heat'], prop: 'material.emissiveIntensity', off: 0, on: 1.3, note: 'cloneInstanceMaterials(cab) first' },
+    trinkets: { driver: 'render/fp/trinkets.js (new Trinkets(cab).update(dt, { speed, latAcc, bump }))', pivots: ['hula', 'hula_spring', 'hula_hips', 'hula_arms', 'freshener', 'dice'] },
+  };
+  // spring / pendulum data for render/fp/trinkets.js (all pivots rest at identity rotation except hula.rotation.y = facing)
+  const S = TRINKETS.hula.scale;
+  g.userData.trinkets = {
+    hula: { anchor: 'hula', spring: 'hula_spring', hips: 'hula_hips', arms: 'hula_arms', height: +(0.085 * S).toFixed(3), axes: 'rotation.x > 0 leans forward (+Z), rotation.z > 0 leans to Rook\'s right (−X); order XZY' },
+    freshener: { pivot: 'freshener', length: +(TRINKETS.freshener.string + TRINKETS.freshener.h * 0.45).toFixed(3), axes: 'pendulum: rotation.x > 0 swings toward Rook (−Z), rotation.z > 0 toward +X; rotation.y twists about the string; order XZY' },
+    dice: { pivot: 'dice', length: +(TRINKETS.dice.knot + 0.045).toFixed(3), axes: 'as freshener' },
   };
   g.userData.perInstanceMaterials = ['mirror_l_glass', 'mirror_r_glass', 'mirror_c_glass', 'lamp_check', 'lamp_oil', 'lamp_heat'];
   g.userData.viewBox = { min: [-1.5, -0.1 + 0.5, -0.65], max: [1.5, 2.2, 0.65] };
@@ -455,7 +470,7 @@ function shell(k) {
     k.box(C.seat, [0.52, 0.7, 0.12], [x, FY + 0.82, 2.3], { rot: [-0.12, 0, 0] });
     k.box(C.seat2, [0.36, 0.18, 0.1], [x, FY + 1.27, 2.27], { rot: [-0.12, 0, 0] });
     k.box(C.stripe, [0.12, 0.5, 0.01], [x + 0.12, FY + 0.82, 2.37], { rot: [-0.12, 0, 0] }); }
-  // side mirror housings + arms, centre mirror body, pine freshener
+  // side mirror housings + arms, centre mirror body
   for (const [s, yaw] of [[1, 0.3], [-1, -0.48]]) {
     inFrame(k, M4([s * 1.37, 1.6, 3.2], [0, yaw, 0]), () => {
       k.box('#1f2022', [0.2, 0.39, 0.24], [0, 0, 0], { c: 0.03 });
@@ -466,9 +481,7 @@ function shell(k) {
   }
   inFrame(k, M4([0.22, 2.02, 2.8], [0, -0.42, 0]), () => k.box('#2a2a2b', [0.3, 0.095, 0.035], [0, 0, 0], { c: 0.012 }));
   beam(k, '#2a2a2b', [0.22, 2.1, 2.77], [0.22, 2.05, 2.8], 0.02);
-  rod(k, '#d9d2bf', [[0.22, 2.0, 2.8], [0.22, 1.955, 2.8]], 0.002, 3);
-  const pine = [[0.22, 1.955], [0.242, 1.912], [0.23, 1.912], [0.236, 1.894], [0.204, 1.894], [0.21, 1.912], [0.198, 1.912]];
-  k.front(PAL.rvTeal, 2.8, pine, -1, { off: 0 }); k.front(PAL.rvTeal, 2.8, pine, 1, { off: 0 });
+  // (the mint pine freshener + fuzzy dice now hang from this mirror as animated pivots: r3-cab-trinkets.js)
   // passenger visor stowed
   k.box('#bfb39a', [0.46, 0.022, 0.16], [-0.56, 2.105, 2.66], { c: 0.008 });
 }
@@ -488,7 +501,7 @@ function mirrorPlanes() {
 
 // ═════════════════════════════════════════════════════════════════════════════
 // dashboard: profile, defrost grilles, vents, HVAC, AM/FM radio, glovebox, CB under the dash,
-// visor + folded map, dash caddy with coffee + cassettes
+// visor + folded map, dash life (r3-cab-trinkets.js dashLife)
 function dashboard(k, dk, U) {
   const dashTop = (cx, cy, cz, nx, ny) => (ny > 0.55 ? C.pad : cy < 1.2 ? C.dash : C.dashL);
   k.extrude(dashTop, [[2.94, 1.0], [3.31, 1.0], [3.33, 1.4], [3.14, 1.5], [2.99, 1.485], [2.93, 1.41]], 2.18, { axis: 'x', bevel: 0.02 });
@@ -590,31 +603,9 @@ function dashboard(k, dk, U) {
       quad(k, '#cfc3a2', a, b, c, d, [0, 0, 1]);                                            // paper back
     }
     k.box('#4a4238', [0.37, 0.011, 0.004], [0, -0.06, -0.0245]);                               // elastic strap over the map
+    visorSlips(k, dk);                                                                          // toll ticket + parking stub
   });
 
-  // ── dash caddy on the dash top: coffee in a cup ring, cassette tapes ──
-  {
-    const y0 = 1.497;
-    k.at([0.115, y0, 3.065], [0, 0.08, 0], () => {
-      k.box('#2a2826', [0.17, 0.026, 0.1], [0, 0, 0], { base: true });
-      k.cyl('#2a2826', 0.047, 0.047, 0.035, [0.045, 0.017, 0], { seg: 10, open: true });
-      // to-go coffee: paper cup, kraft sleeve, brown lid with a sip slot
-      k.lathe('#f1ece0', [[0.031, 0.0], [0.04, 0.115], [0.0, 0.115]], 10, [0.045, 0.006, 0]);
-      k.cyl('#9a6a3e', 0.0395, 0.0365, 0.042, [0.045, 0.07, 0], { seg: 10, open: true });
-      k.cyl('#4a3426', 0.0425, 0.0425, 0.012, [0.045, 0.126, 0], { seg: 10 });
-      k.cyl('#3e2c20', 0.03, 0.036, 0.006, [0.045, 0.134, 0], { seg: 10 });
-      k.box('#1a120d', [0.012, 0.002, 0.005], [0.045, 0.1375, -0.02]);
-      // a cassette standing in the caddy's slot
-      k.box('#1b1b1c', [0.066, 0.01, 0.042], [-0.045, 0.044, 0.0], { rot: [Math.PI / 2 - 0.15, 0, 0] });
-    });
-    // loose cassette on the dash, and one in its clear case
-    k.at([-0.07, y0, 3.09], [0, 0.42, 0], () => {
-      k.box('#1b1b1c', [0.1, 0.012, 0.064], [0, 0, 0], { base: true });
-      dk.rect([0, 0.0122, 0], [-0.049, 0, 0], [0, 0, 0.0315], U('cassA', 1), '#efe7d2', [0, 1, 0]);
-    });
-    k.at([-0.2, y0, 3.12], [0, -0.28, 0], () => {
-      k.box('#a9b1b5', [0.11, 0.017, 0.071], [0, 0, 0], { base: true });
-      dk.rect([0, 0.0172, 0], [-0.052, 0, 0], [0, 0, 0.033], U('cassB', 1), '#e9d6c0', [0, 1, 0]);
-    });
-  }
+  // ── dash life: caddy with the coffee + phone clip, sunglasses, gum, receipt, toll slips, cassettes, polaroid ──
+  dashLife(k, dk);
 }

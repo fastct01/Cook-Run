@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Young Rook &amp; Guns</title>
+<meta name="description" content="Round 3 proposal (R3-ROOK): a younger Rook and real guns for the roof defence. Not wired into the game.">
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+<style>
+  :root { --ink: #f1ebdc; --muted: #b9b09c; --mustard: #F2B90F; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #2b2a28; font-family: "Inter", "Segoe UI", system-ui, Helvetica, Arial, sans-serif; }
+  body.studio { background: radial-gradient(ellipse at 50% 35%, #4d4a44 0%, #2b2a28 78%); }
+  body.sky { background: linear-gradient(#9fc4dc 0%, #d9e2dc 52%, #e8cfa4 100%); }
+  canvas { display: block; position: fixed; inset: 0; width: 100vw; height: 100vh; }
+  #cap { position: fixed; left: 14px; top: 12px; max-width: calc(100vw - 28px); padding: 7px 12px; border-radius: 4px; background: rgba(24, 22, 20, 0.82); color: var(--ink); font-size: 14px; line-height: 1.35; font-weight: 600; letter-spacing: 0.01em; pointer-events: none; z-index: 5; }
+  #cap b { color: var(--mustard); font-weight: 800; }
+  #cap span { color: var(--muted); font-weight: 500; }
+  #cap:empty { display: none; }
+  .tag { position: fixed; transform: translate(-50%, -100%); padding: 3px 7px 4px; border-radius: 3px; background: rgba(24, 22, 20, 0.86); color: var(--ink); font-size: 12.5px; font-weight: 700; white-space: nowrap; pointer-events: none; text-align: center; line-height: 1.25; z-index: 4; }
+  .tag i { display: block; font-style: normal; font-weight: 500; font-size: 11px; color: var(--muted); }
+  .tag.small { font-size: 11.5px; }
+  .tag.below { transform: translate(-50%, 0); }
+  .tag.hd { background: rgba(242, 185, 15, 0.92); color: #22201c; }
+  .tag.hd i { color: #3b3326; }
+  .lead { position: fixed; width: 0; border-left: 1px solid rgba(241, 235, 220, 0.5); pointer-events: none; z-index: 3; }
+  #err { position: fixed; left: 14px; bottom: 12px; color: #ffb4a0; font: 12px monospace; white-space: pre-wrap; z-index: 6; }
+</style>
+</head>
+<body>
+<div id="cap"></div>
+<div id="err"></div>
+<script type="module">
+// ─────────────────────────────────────────────────────────────────────────────
+// r3-rook-preview — PROPOSED younger Rook + roof-defence guns (agent R3-ROOK). Not wired into the game.
+//   ?view=young | closeup | guns | aim | scene | bg      (bg = the real WorldView, no labels / HUD)
+//   &orbit=1 (OrbitControls)  &cam=x,y,z,tx,ty,tz,fov  &labels=0
+//   bg: &yaw= (RV-local, rad) &pitch= &stop=<route stop id>
+// window.__ready = true once a few frames have been drawn (used by docs/r3/render_r3_rook.py).
+// ─────────────────────────────────────────────────────────────────────────────
+import * as THREE from 'three';
+import { createModel, cloneInstanceMaterials, statsOf } from './js/assets/index.js';
+import { Avatar } from './js/onfoot/avatar.js';
+import { stickOnWindscreen, fitFlatTyre } from './js/assets/expansion/r3-rook-fx.js';
+import { puffGeometry, steamMaterial } from './js/assets/expansion/hazards-util.js';
+
+const Q = new URLSearchParams(location.search);
+const VIEW = Q.get('view') || 'young';
+const LABELS = Q.get('labels') !== '0' && VIEW !== 'bg';
+const W = innerWidth, H = innerHeight;
+const PI = Math.PI;
+const errEl = document.getElementById('err');
+addEventListener('error', (e) => { errEl.textContent += (e.message || e) + '\n'; });
+addEventListener('unhandledrejection', (e) => { errEl.textContent += String(e.reason && e.reason.stack || e.reason) + '\n'; });
+
+const ROOF_Y = 3.11, STANCE = [0, ROOF_Y, -1.8];   // sim/roof.js ROOF_GEOM (RV-local)
+
+let renderer, scene, camera;
+function makeRenderer() {
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+  renderer.setPixelRatio(1);
+  renderer.setSize(W, H);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  document.body.appendChild(renderer.domElement);
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(55, W / H, 0.05, 900);
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+function setCam(pos, look, fov = 55) { camera.position.set(...pos); camera.fov = fov; camera.updateProjectionMatrix(); camera.lookAt(...look); }
+const tags = [];
+function tag(text, sub, world, cls = '', anchor = null) {
+  if (!LABELS) return;
+  const d = document.createElement('div'); d.className = 'tag ' + cls; d.innerHTML = text + (sub ? `<i>${sub}</i>` : ''); document.body.appendChild(d);
+  let l = null; if (anchor) { l = document.createElement('div'); l.className = 'lead'; document.body.appendChild(l); }
+  tags.push({ d, l, p: new THREE.Vector3(...world), a: anchor ? new THREE.Vector3(...anchor) : null });
+}
+const scr = (v) => { const q = v.clone().project(camera); return { x: (q.x * 0.5 + 0.5) * W, y: (-q.y * 0.5 + 0.5) * H, ok: q.z < 1 }; };
+function placeTags() {
+  for (const t of tags) {
+    const s = scr(t.p);
+    t.d.style.left = s.x.toFixed(1) + 'px'; t.d.style.top = s.y.toFixed(1) + 'px'; t.d.style.display = s.ok ? '' : 'none';
+    if (t.l) {
+      const a = scr(t.a), y0 = Math.min(s.y, a.y), y1 = Math.max(s.y, a.y);
+      t.l.style.left = s.x.toFixed(1) + 'px'; t.l.style.top = y0.toFixed(1) + 'px'; t.l.style.height = Math.max(0, y1 - y0).toFixed(1) + 'px';
+    }
+  }
+}
+function studio({ floor = '#8d8a84', grid = false, sun = [6, 14, 10] } = {}) {
+  document.body.classList.add('studio');
+  renderer.toneMapping = THREE.NoToneMapping;
+  scene.add(new THREE.HemisphereLight('#e3ebf0', '#6f604c', 1.2));
+  const s = new THREE.DirectionalLight('#fff1dc', 2.05);
+  s.position.set(...sun); s.castShadow = true; s.shadow.mapSize.set(2048, 2048);
+  const sc = s.shadow.camera; sc.left = -6; sc.right = 6; sc.top = 6; sc.bottom = -6; sc.near = 1; sc.far = 40;
+  s.shadow.bias = -0.0004; s.shadow.normalBias = 0.02;
+  scene.add(s);
+  const fill = new THREE.DirectionalLight('#c9d8ff', 0.45); fill.position.set(-8, 5, 6); scene.add(fill);
+  if (floor) {
+    const f = new THREE.Mesh(new THREE.CircleGeometry(14, 64), new THREE.MeshLambertMaterial({ color: floor }));
+    f.rotation.x = -PI / 2; f.receiveShadow = true; scene.add(f);
+  }
+  if (grid) { const g = new THREE.GridHelper(12, 24, '#7a7771', '#84817b'); g.position.y = 0.002; scene.add(g); }
+}
+function shadows(o) { o.traverse((m) => { if (m.isMesh) { m.castShadow = m.material?.blending !== THREE.AdditiveBlending; m.receiveShadow = true; } }); return o; }
+const tris = (o) => statsOf(o).tris;
+/** Aim a rook_roof_aim instance: yaw (model), pitch (arms + head about the shoulder axis). */
+function aimRook(m, yaw, pitch) {
+  m.rotation.y = yaw - (m.userData.aim?.yawOffset || 0);
+  for (const n of ['arm_l', 'arm_r']) m.getObjectByName(n).rotation.x = -pitch;
+  m.getObjectByName('head').rotation.x = -0.9 * pitch;
+}
+/** Attach a muzzle flash (variant v) to a gun's `muzzle`. */
+function flashOn(model, v = 0, s = 1, roll = 0.3) {
+  const f = createModel('muzzle_flash', v).getObjectByName('flash');
+  const mz = model.getObjectByName('muzzle');
+  mz.add(f); f.position.set(0, 0, 0); f.rotation.set(0, 0, roll); f.scale.setScalar(s);
+  return f;
+}
+function seatedPose(m) { // = van/interior.js poseSeated (steer 0)
+  const g = (n) => m.getObjectByName(n);
+  g('leg_l').rotation.x = -1.25; g('leg_r').rotation.x = -1.2;
+  g('arm_l').rotation.set(-1.2, 0, -0.12); g('arm_r').rotation.set(-1.2, 0, 0.12);
+}
+function box(color, size, pos, rot = [0, 0, 0], parent = scene) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(...size), new THREE.MeshLambertMaterial({ color }));
+  m.position.set(...pos); m.rotation.set(...rot); m.castShadow = true; m.receiveShadow = true; parent.add(m); return m;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// views
+// ═════════════════════════════════════════════════════════════════════════════
+const CAPTIONS = {
+  young: '<b>Rook, younger</b> <span>— today’s driver vs rook_young (v0 casual, v1 suited) · same rig as driver: the unchanged onfoot/avatar.js walk + carry and van/interior.js poseSeated drive it as is</span>',
+  closeup: '<b>Young Rook</b> <span>— smooth face, no stubble, smirk + raised brow, teal beanie with Rook’s mustard diamond, headphones, oversized hoodie</span>',
+  guns: '<b>Roof-defence guns + effects</b> <span>— generic, unbranded · tri counts per model · small items enlarged for the lineup (scale noted)</span>',
+  aim: '<b>rook_roof_aim</b> <span>— v0 revolver (two-handed) · v1 pump shotgun · v2 scoped rifle · gun parented to arm_r, muzzle flash on the gun’s <code>muzzle</code></span>',
+  scene: '<b>Roof defence with real guns</b> <span>— Rook fires the rifle from the RV roof: the cop car spun out with a flat front tyre, a cracked windscreen, holes in the door and a steaming radiator; the officer ducks behind it</span>',
+};
+
+function young() {
+  studio();
+  const rows = [
+    ['driver', 0, -3.3, 0.2, {}, 'Rook today', 'driver'],
+    ['rook_young', 0, -2.0, 0.14, {}, 'Young Rook', 'rook_young v0 · casual'],
+    ['rook_young', 1, -0.7, 0.1, {}, 'Young Rook, suited', 'rook_young v1'],
+    ['rook_young', 0, 1.05, 2.25, { speed: 2.6, steps: 9 }, 'walk', 'Avatar walk cycle'],
+    ['rook_young', 1, 2.3, -0.62, { speed: 1.5, carry: 'crate', steps: 13 }, 'carry', 'Avatar carry: “crate”'],
+    ['rook_young', 0, 3.55, -0.55, { seat: true }, 'seated', 'van poseSeated'],
+  ];
+  for (const [k, v, x, yaw, pose, title, sub] of rows) {
+    const model = createModel(k, v);
+    const a = new Avatar(model, { name: k + x });
+    a.set({ x, z: 0, yaw, speed: pose.speed || 0, carry: pose.carry || null }); scene.add(a.root);
+    a.update(0.016); for (let i = 0; i < (pose.steps || 20); i++) a.update(0.05);
+    if (pose.carry) { const c = box('#a07a4c', [0.46, 0.3, 0.34], [0, 0, 0], [0, 0, 0], a.carryAnchor); c.position.y = 0.02; }
+    if (pose.seat) {
+      a.root.position.y = 0.52 - 0.88; seatedPose(model);
+      box('#5d6367', [0.44, 0.08, 0.44], [x, 0.48, -0.08]); box('#4a4f53', [0.36, 0.44, 0.36], [x, 0.22, -0.1]);
+    }
+    shadows(a.root);
+    const st = tris(model);
+    tag(title, `${sub}${pose.speed || pose.seat ? '' : ' · ' + st + ' tris'}`, [x, 2.18, 0], k === 'driver' ? 'small' : (pose.speed || pose.seat ? 'small' : 'small hd'));
+  }
+  // divider: the rig check
+  const ln = new THREE.Mesh(new THREE.PlaneGeometry(0.02, 2.6), new THREE.MeshBasicMaterial({ color: '#6f6b63' }));
+  ln.position.set(0.17, 0.003, 0.2); ln.rotation.x = -PI / 2; scene.add(ln);
+  tag('same rig, unchanged animation code →', '', [2.3, 0.0, 1.3], 'small below');
+  setCam([0.12, 1.45, 8.9], [0.12, 1.0, 0], 30);
+}
+
+function closeup() {
+  studio({ sun: [3, 8, 7] });
+  const m = shadows(createModel('rook_young', 0)); scene.add(m);
+  const key = new THREE.PointLight('#ffe6c4', 2.2, 6, 1.5); key.position.set(1.2, 2.0, 1.6); scene.add(key);
+  setCam([0.58, 1.74, 1.24], [0.02, 1.6, 0.0], 30);
+}
+
+function guns() {
+  studio({ floor: '#7f7c76', grid: true, sun: [3, 12, 9] });
+  const lab = (title, o, s, pos, up, anchorY) => tag(title, `${tris(o)} tris${s !== 1 ? ' \u00b7 \u00d7' + s : ''}`, [pos[0], up ? anchorY + 0.32 : 0, pos[2] + (up ? 0 : 0.26)], up ? 'small' : 'small below', [pos[0], anchorY, pos[2]]);
+  const add = (kind, v, pos, rotY = 0, s = 1, title = null, up = false) => {
+    const o = shadows(createModel(kind, v)); o.position.set(...pos); o.rotation.y = rotY; o.scale.setScalar(s); scene.add(o); cloneInstanceMaterials(o);
+    lab(title || kind + (v ? ' v' + v : ''), o, s, pos, up, up ? o.userData.size.h * s + 0.03 : 0.02);
+    return o;
+  };
+  // back: flat tyres + windscreen cracks on dark glass panels
+  add('flat_tyre', 0, [-1.95, 0, -1.3], -(PI / 2 - 0.45), 1, 'flat_tyre v0', true);
+  add('flat_tyre', 1, [-1.05, 0, -1.25], -(PI / 2 - 0.6), 1, 'v1 shredded', true);
+  const panel = (color, x, z, w, h) => box(color, [w, h, 0.03], [x, h / 2, z]);
+  const decal = (kind, v, x, y, z, s, title, top) => {
+    const o = createModel(kind, v); o.scale.setScalar(s);
+    o.position.set(x, y, z + 0.016); o.rotation.set(PI / 2, 0, 0); scene.add(o);
+    tag(title, `${tris(o)} tris${s !== 1 ? ' \u00b7 \u00d7' + s : ''}`, [x, top + 0.3, z], 'small', [x, top + 0.02, z]);
+  };
+  panel('#26333a', 0.05, -1.35, 0.78, 0.66); decal('windshield_crack', 0, 0.05, 0.36, -1.35, 0.85, 'windshield_crack v0', 0.66);
+  panel('#26333a', 1.15, -1.35, 1.05, 0.66); decal('windshield_crack', 1, 1.15, 0.33, -1.35, 0.85, 'v1 heavy', 0.66);
+  // flashes in front of a low dark board
+  box('#1b1a19', [1.15, 0.5, 0.03], [2.2, 0.25, -1.3]);
+  add('muzzle_flash', 0, [1.95, 0.02, -1.05], -0.95, 1, 'muzzle_flash v0', true);
+  add('muzzle_flash', 1, [2.45, 0.0, -1.05], -0.95, 1, 'v1 wide', true);
+  // middle: the three guns side-on (barrel → +X, right side to the camera)
+  add('gun_rifle', 0, [-1.5, 0, -0.38], PI / 2, 1, 'gun_rifle');
+  add('gun_shotgun', 0, [-0.1, 0, -0.38], PI / 2, 1, 'gun_shotgun');
+  add('gun_revolver', 0, [1.05, 0, -0.38], PI / 2, 1.6, 'gun_revolver');
+  // front: ammo boxes, casings, bullet holes on paint / glass samples
+  add('ammo_box', 0, [-1.62, 0, 0.6], 0.35, 1, 'ammo_box v0');
+  add('ammo_box', 1, [-1.1, 0, 0.6], 0.2, 1, 'v1 shells');
+  add('ammo_box', 2, [-0.58, 0, 0.6], -0.15, 1, 'v2 rifle');
+  add('shell_casing', 0, [-0.1, 0, 0.55], 0.9, 3, 'shell_casing');
+  add('shell_casing', 1, [0.27, 0, 0.55], 0.9, 3, 'v1');
+  add('shell_casing', 2, [0.62, 0, 0.55], 0.9, 3, 'v2');
+  for (const [x, col, v, t] of [[1.15, '#22304d', 0, 'bullet_hole v0'], [1.68, '#26333a', 1, 'v1 glass']]) {
+    box(col, [0.38, 0.32, 0.02], [x, 0.16, 0.45], [-0.25, 0, 0]);
+    const o = createModel('bullet_hole', v); o.scale.setScalar(2); o.position.set(x, 0.16 + 0.01 * Math.cos(0.25), 0.45 + 0.011); o.rotation.set(PI / 2 - 0.25, 0, 0); scene.add(o);
+    tag(t, `${tris(o)} tris \u00b7 \u00d72`, [x, 0, 0.75], 'small below', [x, 0.02, 0.5]);
+  }
+  setCam([0.2, 1.85, 3.55], [0.2, 0.2, -0.45], 41);
+}
+
+function aim() {
+  studio({ sun: [4, 12, 9] });
+  let L = [[0, -2.05, 0.95, 'v0 revolver', 'two-handed'], [1, 0.0, 0.62, 'v1 pump shotgun', 'shouldered'], [2, 2.05, 0.62, 'v2 bolt-action rifle', 'shouldered, scope to the eye']];
+  if (Q.has('one')) L = [L[+Q.get('one')]].map((r) => [r[0], 0, +(Q.get('yaw') || 0), r[3], r[4]]);   // inspection: one figure at the origin
+  for (const [v, x, yaw, title, sub] of L) {
+    const m = shadows(createModel('rook_roof_aim', v)); m.position.set(x, 0, 0); m.rotation.y = yaw; scene.add(m);
+    const n = tris(m);
+    if (Q.get('flash') !== '0') flashOn(m, v === 1 ? 1 : 0, v === 0 ? 0.75 : 0.9);
+    tag(title, `${sub} · ${n} tris`, [x, 2.2, 0], 'small hd');
+  }
+  setCam([0.9, 1.75, 7.6], [0.25, 1.15, 0.2], 33);
+}
+
+// ── shared outdoor dressing for the scene view ───────────────────────────────
+function desert() {
+  document.body.classList.add('sky');
+  scene.background = new THREE.Color('#bcd3df');
+  scene.fog = new THREE.Fog('#d6d9cf', 60, 230);
+  scene.add(new THREE.HemisphereLight('#dfeaf2', '#9a7e5c', 1.15));
+  const sun = new THREE.DirectionalLight('#fff0d6', 2.3);
+  sun.position.set(-14, 22, 9); sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048);
+  const sc = sun.shadow.camera; sc.left = -22; sc.right = 22; sc.top = 26; sc.bottom = -16; sc.near = 1; sc.far = 80;
+  sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.03; sun.target.position.set(-2, 0, 8);
+  scene.add(sun); scene.add(sun.target);
+  const flat = (color, w, l, pos, y = 0) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, l), new THREE.MeshLambertMaterial({ color })); m.rotation.x = -PI / 2; m.position.set(pos[0], y, pos[1]); m.receiveShadow = true; scene.add(m); return m; };
+  flat('#d3ad78', 600, 600, [0, 60], -0.02);
+  flat('#cda36c', 13, 600, [-1.5, 60], -0.012);          // dusty shoulders
+  flat('#4b4c50', 9.2, 600, [-1.5, 60], -0.005);         // road
+  for (let z = -60; z < 260; z += 7) flat('#e2c25a', 0.16, 3.4, [-1.5, z], 0.0);
+  for (const x of [-6.0, 3.0]) flat('#e6e1d2', 0.14, 600, [x, 60], 0.0);
+  const put = (kind, v, x, z, ry = 0, s = 1) => { const o = shadows(createModel(kind, v)); o.position.set(x, 0, z); o.rotation.y = ry; o.scale.setScalar(s); scene.add(o); return o; };
+  put('cactus', 0, 9, 14, 0.4); put('cactus', 1, -13, 26, 1.2); put('cactus', 2, 11, 33, 2.0); put('cactus', 0, -11, 6, 2.6, 0.8);
+  put('rock_big', 0, 14, 22, 0.5); put('rock_big', 1, -16, 40, 1.4); put('rock_small', 0, 7, 4, 0.3);
+  put('mesa', 0, -60, 140, 0.4, 1.2); put('mesa', 1, 50, 170, 1.1, 1.4); put('mesa', 2, -10, 220, 2.0, 1.1);
+  for (let i = 0; i < 5; i++) put('powerpole', 0, 8.5, -10 + i * 36, PI / 2);
+  put('tumbleweed', 0, 7.6, 2.5, 0.4);
+}
+function steam(parent, pos, n = 8, seed = 3) {
+  const mat = steamMaterial();
+  for (let i = 0; i < n; i++) {
+    const g = puffGeometry(seed + i, { bottom: '#c3c8cb', top: '#f6f7f7' });
+    const m = new THREE.Mesh(g, mat);
+    const t = i / (n - 1);
+    m.position.set(pos[0] + Math.sin(i * 2.1) * 0.12 - t * 0.35, pos[1] + t * 1.25, pos[2] + Math.cos(i * 1.7) * 0.1 + t * 0.75);
+    m.scale.setScalar(0.12 + t * 0.26);
+    m.renderOrder = 6;
+    parent.add(m);
+  }
+}
+/** The damaged cop car: cracked windscreen, flat tyre, holes, lights on, steam from the grille. */
+function damagedCop({ flatWheel = 'wheel_fr', holesSide = -1, crack = 1 } = {}) {
+  const cop = shadows(createModel('cop', 0));
+  const fm = cloneInstanceMaterials(cop);
+  if (fm.light_red) fm.light_red.emissiveIntensity = 2.4;
+  if (fm.light_blue) fm.light_blue.emissiveIntensity = 0.25;
+  stickOnWindscreen(cop, createModel('windshield_crack', crack));
+  fitFlatTyre(cop, flatWheel, shadows(createModel('flat_tyre', 0)));
+  const body = cop.getObjectByName('body');
+  // holes in the door and the front fender (decal +Y → the car side's normal)
+  for (const [z, y, v] of [[0.55, 0.72, 0], [0.18, 0.6, 0], [1.6, 0.66, 0], [-0.35, 1.15, 1]]) {
+    const d = createModel('bullet_hole', v);
+    d.position.set(holesSide * (v ? 0.86 : 0.975), y, z);
+    d.rotation.set(0, 0, holesSide > 0 ? -PI / 2 : PI / 2);
+    if (v) { d.rotation.set(0, 0, holesSide > 0 ? -PI / 2 + 0.25 : PI / 2 - 0.25); }
+    body.add(d);
+  }
+  steam(body, [0, 0.7, 2.42]);
+  return cop;
+}
+
+function sceneView() {
+  desert();
+  renderer.toneMappingExposure = 1.0;
+  const rv = shadows(createModel('rv', 0)); scene.add(rv);
+  const hatch = shadows(createModel('roof_hatch', 0)); hatch.position.set(...hatch.userData.rvMount.pos); rv.add(hatch);
+  const tank = shadows(createModel('water_tank', 0)); tank.position.set(...tank.userData.rvMount.pos); rv.add(tank);
+  const ammo = shadows(createModel('ammo_box', 2)); ammo.position.set(0.72, ROOF_Y, -2.05); ammo.rotation.y = 0.6; rv.add(ammo);
+  // the cop: ahead-left of the RV, spun out across the lane (front + right side toward the camera)
+  const cop = damagedCop({ flatWheel: 'wheel_fl', holesSide: 1 });
+  const cyaw = 2.15, cpos = [3.6, 0, 9.4];
+  cop.position.set(...cpos); cop.rotation.y = cyaw; scene.add(cop);
+  const toWorld = (lx, lz) => [cpos[0] + lx * Math.cos(cyaw) + lz * Math.sin(cyaw), cpos[2] - lx * Math.sin(cyaw) + lz * Math.cos(cyaw)];
+  // the officer ducking behind the car's far side
+  const ow = toWorld(-1.45, -0.75);
+  const off = new Avatar(createModel('cop_officer', 0), { name: 'officer' });
+  off.set({ x: ow[0], z: ow[1], yaw: PI - 0.45, crouch: 1, lookY: 0.3 }); scene.add(off.root);
+  for (let i = 0; i < 6; i++) off.update(0.05);
+  shadows(off.root);
+  // a second cop further back, lights on, still coming
+  const c2 = shadows(createModel('cop_suv', 0)); const f2 = cloneInstanceMaterials(c2);
+  if (f2.light_blue) f2.light_blue.emissiveIntensity = 2.2;
+  c2.position.set(-3.2, 0, 44); c2.rotation.y = PI + 0.05; scene.add(c2);
+  // Rook on the roof, aiming at the cop's front wheel / radiator
+  const rook = shadows(createModel('rook_roof_aim', 2));
+  rook.position.set(...STANCE); rv.add(rook);
+  const tw = toWorld(0.8, 1.6), tgt = new THREE.Vector3(tw[0], 0.45, tw[1]);
+  const sh = new THREE.Vector3(STANCE[0], STANCE[1] + 1.36, STANCE[2]);
+  const yaw = Math.atan2(tgt.x - sh.x, tgt.z - sh.z), pitch = Math.atan2(tgt.y - sh.y - 0.2, Math.hypot(tgt.x - sh.x, tgt.z - sh.z));
+  aimRook(rook, yaw, pitch);
+  flashOn(rook, 0, 1.5, 0.5);
+  // a spent case flying off to his right (the bolt was just worked)
+  const cs = createModel('shell_casing', 0).getObjectByName('casing');
+  rook.updateMatrixWorld(true);
+  const bp = new THREE.Vector3(); rook.getObjectByName('bolt').getWorldPosition(bp);
+  scene.add(cs); cs.position.copy(bp).add(new THREE.Vector3(0.42, 0.3, -0.2)); cs.rotation.set(0.6, 1.2, 0.3); cs.scale.setScalar(2);
+  setCam([2.15, 6.45, -6.3], [1.25, 2.55, 6.0], 50);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// bg — the REAL game world (WorldView, driver role) parked at a supply stop, young Rook with the
+// rifle on the roof, the over-the-shoulder roof camera (van/roof/roofCamera.js pose maths), a
+// damaged cop in the lot. No labels, no HUD.
+// ═════════════════════════════════════════════════════════════════════════════
+async function bg() {
+  document.getElementById('cap').remove();
+  const { loadData } = await import('./js/data/loadData.js');
+  const { WorldView } = await import('./js/render/WorldView.js');
+  const { Track } = await import('./js/sim/track.js');
+  const { rvToWorld } = await import('./js/sim/roof.js');
+  const { KIND_ID } = await import('./js/shared/protocol.js');
+  const data = await loadData();
+  const seed = data.route.defaultSeed ?? 1;
+  const canvas = document.createElement('canvas'); document.body.appendChild(canvas);
+  const view = new WorldView(canvas, data, { seed, role: 'driver', pixelRatio: 1 });
+  view.resize();
+  const track = new Track(data.route, seed);
+  const stopDef = data.route.stops.find((s) => s.id === Q.get('stop')) || data.route.stops[0];
+  const z = stopDef.z + 4, ryaw = track.headingAt(z);
+  const u = stopDef.side * (track.halfWidth(z) + track.shoulder(z) + 3.0);
+  const RV = { x: track.xAt(z, u), z, yaw: ryaw };
+  // a second (undamaged) cop as an entity further back, lights on, approaching
+  const c2 = rvToWorld(RV, stopDef.side * 11, 38);
+  const snap = (t) => ({
+    t, phase: 'drive', countdown: 0, lostReason: null,
+    rv: { x: RV.x, y: 0, z: RV.z, yaw: RV.yaw, pitch: 0, roll: 0, speed: 0, steer: 0, hp: 88, airborne: false, nitro: 0, flatTyre: false, onRoad: false, zone: 'lot', regen: false, roofDoc: false },
+    crew: { driver: 96, cook: 90, cookDown: false },
+    heat: { value: 2.4, stars: 2, seen: true, gaveUp: false }, bust: 0,
+    score: { points: 1200, chaos: 3, knocked: 1, smashed: 4, copsWrecked: 0 },
+    inv: { mat: {}, units: 2, quality: 0.7, gadgets: { smoke: 1, oil: 0, nitro: 0 } },
+    stop: null, roof: null, nearStop: null,
+    bridge: { dist: data.route.bridge.lip - RV.z, speedNeeded: 30 },
+    biome: track.biomeAt(RV.z).id, dist: RV.z, routeLength: data.route.routeLength,
+    feel: { latAcc: 0, bump: 0, speed: 0 }, alert: { copClose: false, copDist: 20 },
+    lab: { fumes: 0.1, fire: 0, ventOpen: false, curtains: false, cooking: false },
+    timeOfDay: +(Q.get('hour') || 15.5), area: { id: track.biomeAt(RV.z).id, name: track.biomeAt(RV.z).name }, fx: { fog: 0, flash: 0, shock: 0 }, setpieces: [], garage: null,
+    ents: [[901, KIND_ID.cop_suv ?? KIND_ID.cop, +c2.x.toFixed(3), 0, +c2.z.toFixed(3), +(RV.yaw + PI + 0.15).toFixed(4), 0, 1]],
+    events: [],
+  });
+  view.pushSnapshot(snap(0));
+  await view.ready;
+  for (let i = 0; i < 3; i++) view.render(0.016, { draw: false });
+  // young Rook with the rifle, on the roof (RV-local frame), roof gear as in the game's roof mode
+  const anchor = view.rvAnchor;
+  const rook = createModel('rook_roof_aim', 2);
+  rook.position.set(...STANCE); rook.scale.setScalar(0.92); anchor.add(rook);   // roofScene draws doc_roof at 0.92
+  // (RvView already draws the roof hatch, hose reel and tank once snap.rv.roofDoc is defined; Doc stays inside)
+  const ammo = createModel('ammo_box', 2); ammo.position.set(-0.55, ROOF_Y, -1.55); ammo.rotation.y = 0.5; anchor.add(ammo);
+  for (const o of [rook, ammo]) shadows(o);
+  // damaged cop in the lot (world frame), ahead on the road side
+  const cp = rvToWorld(RV, stopDef.side * +(Q.get('cx') || 7.5), +(Q.get('cz') || 15));   // street side, ahead
+  const cop = damagedCop({ flatWheel: 'wheel_fl', holesSide: 1, crack: 1 });
+  cop.position.set(cp.x, 0, cp.z);
+  cop.rotation.y = RV.yaw + PI + (+(Q.get('cyaw') || -0.75)) * stopDef.side;
+  view.scene.add(cop);
+  // aim: camera yaw/pitch (RV-local) = Rook's aim, like the game's roof camera
+  const camYaw = +(Q.get('yaw') ?? NaN), camPitch = +(Q.get('pitch') ?? -0.27);
+  anchor.updateWorldMatrix(true, true);
+  const copLocal = anchor.worldToLocal(new THREE.Vector3(cp.x, 0.8, cp.z));
+  const aimYaw = Math.atan2(copLocal.x - STANCE[0], copLocal.z - STANCE[2]);
+  const yaw = isFinite(camYaw) ? camYaw : aimYaw + stopDef.side * +(Q.get('lead') ?? 0.3);   // camera looks a touch past the target so the rifle reads in 3/4
+  const shoulder = new THREE.Vector3(STANCE[0], ROOF_Y + 1.36 * 0.92, STANCE[2]);
+  const aimPitch = Math.atan2(copLocal.y - shoulder.y, Math.hypot(copLocal.x - shoulder.x, copLocal.z - shoulder.z));
+  aimRook(rook, aimYaw, aimPitch);
+  const eye = new THREE.Vector3(), tg = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0), m4 = new THREE.Matrix4(), q4 = new THREE.Quaternion();
+  const dist = +(Q.get('dist') || 3.4), shoulderOff = +(Q.get('sh') || 1.05);   // game: 3.6 / 0.85 — a touch wider so the rifle clears his head
+  view.setCameraController({
+    update(dt, cam) {
+      // van/roof/roofCamera.js localPose: behind the right shoulder of a pivot 1.75 m above the roof
+      const cy = Math.cos(yaw), sy = Math.sin(yaw), cpp = Math.cos(camPitch), sp = Math.sin(camPitch);
+      const dx = sy * cpp, dy = sp, dz = cy * cpp, rx = -cy, rz = sy;
+      const px = STANCE[0], py = ROOF_Y + 1.75, pz = STANCE[2];
+      eye.set(px - dx * dist + rx * shoulderOff, py - dy * dist + 0.3, pz - dz * dist + rz * shoulderOff);
+      eye.y = Math.max(eye.y, ROOF_Y + 0.95);
+      tg.set(eye.x + dx * 10, eye.y + dy * 10, eye.z + dz * 10);
+      anchor.updateWorldMatrix(true, false);
+      eye.applyMatrix4(anchor.matrixWorld); tg.applyMatrix4(anchor.matrixWorld);
+      m4.lookAt(eye, tg, up); q4.setFromRotationMatrix(m4);
+      cam.position.copy(eye); cam.quaternion.copy(q4);
+      if (cam.fov !== 60 || cam.near !== 0.25) { cam.fov = 60; cam.near = 0.25; cam.updateProjectionMatrix(); }
+      cam.updateMatrixWorld();
+    },
+  });
+  if (Q.get('flash') === '1') flashOn(rook, 0, 0.9, 0.4);
+  // settle chunks, then draw
+  let t = 0;
+  for (let i = 0; i < 400 && !view.isSettled(); i++) { t += 1 / 30; view.pushSnapshot(snap(t)); view.render(1 / 30, { draw: false }); }
+  let frames = 0;
+  window.__view = view;
+  function loop() {
+    t += 1 / 30; view.pushSnapshot(snap(t)); view.render(1 / 30);
+    if (++frames === 4) window.__ready = true;
+    requestAnimationFrame(loop);
+  }
+  loop();
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+document.getElementById('cap').innerHTML = LABELS ? (CAPTIONS[VIEW] || VIEW) : '';
+if (VIEW === 'bg') {
+  bg().catch((e) => { errEl.textContent += String(e && e.stack || e); });
+} else {
+  makeRenderer();
+  ({ young, closeup, guns, aim, scene: sceneView })[VIEW]?.();
+  const c = Q.get('cam'); if (c) { const v = c.split(',').map(Number); setCam([v[0], v[1], v[2]], [v[3], v[4], v[5]], v[6] || camera.fov); }
+  if (Q.get('orbit') === '1') {
+    const { OrbitControls } = await import('three/addons/controls/OrbitControls.js');
+    const oc = new OrbitControls(camera, renderer.domElement);
+    const d = new THREE.Vector3(); camera.getWorldDirection(d); oc.target.copy(camera.position).addScaledVector(d, 4); oc.update();
+  }
+  let frames = 0;
+  (function loop() {
+    renderer.render(scene, camera);
+    placeTags();
+    if (++frames === 4) window.__ready = true;
+    requestAnimationFrame(loop);
+  })();
+  window.__scene = scene; window.__camera = camera;
+}
+</script>
+</body>
+</html>

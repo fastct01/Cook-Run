@@ -30,10 +30,19 @@
 //   ?gear=P|R|N|D|L  ?mph=  ?rpm=  ?temp=0..1  ?lamps=1  ?signal=L|R  ?wipers=<rad>  ?horn=1  ?key=off|run|start
 //   ?cam=custom&cpos=x,y,z&cat=x,y,z (RV-local camera + target)
 //   ?z=<route m> ?tod=<hour> ?fov= ?pitch= ?yaw=<head yaw rad, + = left> ?world=0 (plain backdrop) ?mirrors=0 ?shot=1
-// window.__cab = { done, ready, cab, view, frame(n), stats() }
+// R3-CAB2 additions:
+//   ?sim=brakebump  scripted drive (cruise → hard brake → bump → roll on) with the trinkets driven by
+//                   render/fp/trinkets.js at a fixed 1/120 s step; ?t=<s> pre-rolls stills to that moment
+//                   (default: settled cruise). window.__cab.advance(dt) steps it frame by frame (GIF frames).
+//   ?scene=garage   the RV parked in Rook's Garage (garage_interior at sim/garage.js garageFrame, door open)
+//   ?traffic=1      a few cars + pedestrians around the RV (street scene)
+//   ?scene=defend   the RV stopped (speed 0), two police cars pulled up close ahead at angles, light bars on
+//   ?cam=trinkets|hula|mirror  close-ups of the dash toys   ?lane=<i>  RV lane (default: inner forward lane)
+// window.__cab = { done, ready, cab, view, frame(n), advance(dt), stats(), trinkets, simT }
 // ─────────────────────────────────────────────────────────────────────────────
 import * as THREE from 'three';
 import { createModel, cloneInstanceMaterials, statsOf } from './js/assets/index.js';
+import { Trinkets } from './js/render/fp/trinkets.js';
 
 const q = new URLSearchParams(location.search);
 const num = (k, d) => (q.has(k) && q.get(k) !== '' ? +q.get(k) : d);
@@ -54,7 +63,27 @@ const PRESETS = {
   dash: { pos: [-0.3, 1.66, 2.36], at: [0.3, 1.27, 3.0], fov: 60 },
   wide: { pos: [0.42, 2.06, 2.12], at: [0.5, 1.5, 3.2], fov: 78 },
   side: { pos: [1.0, 1.72, 2.95], at: [0.52, 1.56, 2.95], fov: 50 },
+  trinkets: { pos: [0.53, 1.94, 2.46], at: [0.16, 1.74, 2.98], fov: 44 },
+  hula: { pos: [0.36, 1.74, 2.78], at: [0.2, 1.6, 3.08], fov: 34 },
+  mirror: { pos: [0.48, 1.95, 2.5], at: [0.24, 1.89, 2.8], fov: 34 },
 };
+const SIM = q.get('sim');
+const SCENE = q.get('scene') || 'street';
+const TRAFFIC = q.get('traffic') === '1';
+/** Scripted drive: speed (m/s), accel (m/s²), bump level (0..1, decays 3/s like GameSim.feel.bump), latAcc. */
+function scenario(t) {
+  if (SIM !== 'brakebump') return { speed: num('speed', 0), accel: 0, bump: 0, lat: 0 };
+  // 4 s loop that starts and ends at rest: cruise 13 m/s → hard brake (−8.4 m/s², 0.2–1.15 s) → roll on at 5 m/s
+  // → bump at 1.9 s (bump level 0.95, decaying like the sim) → everything settles by 4 s
+  const v0 = 13, tb = 0.2, decel = -8.4, v1 = 5, tStop = tb + (v1 - v0) / decel, tBump = 1.9;
+  let speed, accel;
+  if (t < tb) { speed = v0; accel = 0; }
+  else if (t < tStop) { speed = v0 + decel * (t - tb); accel = decel; }
+  else { speed = v1; accel = 0; }
+  const bump = t >= tBump ? Math.max(0, 0.95 - 3 * (t - tBump)) : 0;
+  return { speed, accel, bump, lat: 0 };
+}
+const camBob = { y: 0, v: 0, prevBump: 0 };
 
 function buildCab() {
   const cab = createModel(KIND, VAR);
@@ -81,6 +110,9 @@ function buildCab() {
     for (const [n, a] of [['hand_l', gA + slip], ['hand_r', -gA + slip]]) { const h = g(n); if (h) { h.position.set(R * Math.sin(a), R * Math.cos(a), 0); h.rotation.z = -slip; } }
   } else { set('hand_l', FOLLOW * WHEEL); set('hand_r', FOLLOW * WHEEL); }
   set('wiper_l', num('wipers', 0)); set('wiper_r', num('wipers', 0));
+  // static trinket pose for detail shots: ?hulaX=&hulaZ= (rad) tilt the dancer, ?swing= swings freshener + dice
+  if (q.has('hulaX') || q.has('hulaZ')) { const h = g('hula_spring'); if (h) { h.rotation.x = num('hulaX', 0); h.rotation.z = num('hulaZ', 0); } const hp = g('hula_hips'); if (hp) { hp.rotation.x = -0.9 * num('hulaX', 0); hp.rotation.z = -0.9 * num('hulaZ', 0); } }
+  if (q.has('swing')) for (const nm of ['freshener', 'dice']) { const o = g(nm); if (o) o.rotation.x = -num('swing', 0); }
   const ctl = cab.userData.controls;
   if (ctl) {
     const gear = (q.get('gear') || 'D').toUpperCase();
@@ -98,8 +130,8 @@ function placeCamera(camera, frame, ud) {
   const qf = new THREE.Quaternion(); frame.getWorldQuaternion(qf);
   let posL, qL, fov;
   if (CAM === 'eye') {
-    posL = new THREE.Vector3(...ud.eye);
-    qL = new THREE.Quaternion().setFromEuler(new THREE.Euler(num('pitch', -0.16), Math.PI + num('yaw', 0), 0, 'YXZ'));
+    posL = new THREE.Vector3(...ud.eye); posL.y += camBob.y;
+    qL = new THREE.Quaternion().setFromEuler(new THREE.Euler(num('pitch', -0.16) + camBob.y * 0.35, Math.PI + num('yaw', 0), 0, 'YXZ'));
     // FirstPersonDriver._baseFov: 76° (VIEW_FOV), widened on narrow screens to keep ~90° across
     const a = camera.aspect || 16 / 9, need = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(Math.PI / 4) / a));
     fov = Math.min(104, Math.max(num('fov', 76), need));
@@ -120,37 +152,120 @@ function placeCamera(camera, frame, ud) {
 function caption(cab) {
   const st = statsOf(cab);
   const ud = cab.userData;
-  document.getElementById('cap').textContent = `${KIND} v${VAR}${KIND === 'rv_cab_fp_r3' ? (VAR ? ' · bare hands' : ' · nitrile gloves') : ''} · cam ${CAM}` +
+  document.getElementById('cap').textContent = `${KIND} v${VAR}${KIND === 'rv_cab_fp_r3' ? (VAR ? ' · bare hands, hoodie' : ' · nitrile gloves') : ''} · cam ${CAM}` +
     `${CAM === 'eye' ? ` (eye ${ud.eye.join(', ')}, pitch −0.16, fov 76°)` : ''}\n${st.tris} tris · ${st.meshes} meshes · wheel ${num('wheel', 0)}°`;
 }
 
 async function runWorld() {
-  const [{ loadData }, { WorldView }, { Track }, { Mirrors }] = await Promise.all([
-    import('./js/data/loadData.js'), import('./js/render/WorldView.js'), import('./js/sim/track.js'), import('./js/render/fp/mirrors.js')]);
+  const [{ loadData }, { WorldView }, { Track }, { Mirrors }, { KIND_ID }] = await Promise.all([
+    import('./js/data/loadData.js'), import('./js/render/WorldView.js'), import('./js/sim/track.js'), import('./js/render/fp/mirrors.js'), import('./js/shared/protocol.js')]);
   const data = await loadData();
   const seed = data.route.defaultSeed;
   const track = new Track(data.route, seed);
   const view = new WorldView(canvas, data, { seed, role: 'driver' });
-  const z = num('z', 21000);
-  const n = track.lanesAt(z), u = track.laneU(z, Math.min(n - 1, Math.floor(n / 2)));
+  let z = num('z', 21000);
+  const n = track.lanesAt(z), lane = Math.min(n - 1, num('lane', Math.floor(n / 2)));
   const snap = {
     t: 0, phase: 'drive', countdown: 0, timeOfDay: num('tod', 10.5),
-    rv: { x: track.xAt(z, u), y: track.surfaceY(z) ?? 0, z, yaw: track.headingAt(z), pitch: 0, roll: 0, speed: 0, steer: 0, hp: 100, airborne: false, nitro: 0, onRoad: true },
+    rv: { x: 0, y: 0, z, yaw: 0, pitch: 0, roll: 0, speed: 0, steer: 0, hp: 100, airborne: false, nitro: 0, onRoad: true },
     crew: { driver: 100, cook: 100 }, heat: { value: 0, stars: 0 }, bust: 0, score: { points: 0, chaos: 0 }, inv: { units: 0, quality: 0, gadgets: {} },
     feel: { latAcc: 0, bump: 0 }, alert: {}, lab: {}, ents: [], events: [], dist: z, routeLength: data.route.routeLength, looted: [],
   };
+  const poseRv = () => {
+    const u = track.laneU(z, lane);
+    Object.assign(snap.rv, { x: track.xAt(z, u), y: track.surfaceY(z) ?? 0, z, yaw: track.headingAt(z) });
+  };
+  poseRv();
   await view.ready;
   const cab = buildCab();
   view.rvAnchor.add(cab);
   const frame = cab.getObjectByName('rv_frame') || cab;
+  // ── Rook's Garage: interior at the garage frame, RV parked on its bay, roll-up door open ──
+  if (SCENE === 'garage') {
+    const { garageFrame, LAYOUT } = await import('./js/sim/garage.js');
+    const fr = garageFrame(track, data.route);
+    let baseY = 0; try { baseY = track.surfaceY(fr.gz) ?? 0; } catch (e) { baseY = 0; }
+    const root = new THREE.Group(); root.name = 'preview_garage';
+    root.position.set(fr.ox, baseY, fr.oz); root.rotation.y = fr.rot; view.scene.add(root);
+    const it = createModel('garage_interior'); cloneInstanceMaterials(it); root.add(it);
+    const gi = (nm) => it.getObjectByName(nm);
+    if (gi('door')) gi('door').position.y = LAYOUT.door.open;
+    for (let i = 0; i < 4; i++) if (gi('marker_' + i)) gi('marker_' + i).visible = false;
+    if (gi('crate')) { gi('crate').position.set(LAYOUT.crateStart.x, 0, LAYOUT.crateStart.z); gi('crate').rotation.set(0, LAYOUT.crateStart.yaw, 0); }
+    for (const [x, zz] of [[-4.5, -1.8], [-0.5, 3.6], [5.2, -1.0]]) { const L = new THREE.PointLight('#ffd9a0', 11, 12, 1.4); L.position.set(x, 4.7, zz); root.add(L); }
+    view.setGarageExteriorVisible(false);
+    const p = fr.toWorld(LAYOUT.rvPark.x, LAYOUT.rvPark.z);
+    Object.assign(snap.rv, { x: p.x, z: p.z, y: baseY, yaw: fr.yawToWorld(LAYOUT.rvPark.yaw) });
+    z = p.z;
+  }
+  // ── a little traffic for the street shots (cars in both directions, people on the sidewalks) ──
+  const traffic = (t) => {
+    const ents = []; let id = 1;
+    const hw = track.halfWidth(z), sh = track.shoulder(z);
+    if (SCENE === 'defend') {
+      // two cruisers pulled up close ahead at different angles (state 1 = chase, light bars on), onlookers on the sidewalks
+      const Z = num('z', 21000), h = track.headingAt(Z), cop = (kind, dz, u, dyaw, variant) => {
+        const zz = Z + dz; ents.push([id++, KIND_ID[kind], +track.xAt(zz, u).toFixed(3), 0, +zz.toFixed(3), +(track.headingAt(zz) + dyaw).toFixed(4), variant, 1]);
+      };
+      const uL = track.laneU(Z, lane);
+      cop('cop', num('copA', 9.5), uL - 1.6, Math.PI + 0.62, 0);
+      cop('cop', num('copB', 15.5), uL + 2.6, Math.PI - 1.05, 1);
+      for (let i = 0; i < 5; i++) {
+        const side = i % 2 ? 1 : -1, zz = Z + 12 + i * 6, u = side * (hw + sh + 1.2 + (i % 3) * 0.5);
+        ents.push([id++, KIND_ID.ped, +track.xAt(zz, u).toFixed(3), 0, +zz.toFixed(3), +(h + (side > 0 ? -Math.PI / 2 : Math.PI / 2)).toFixed(4), i + 2, 0]);
+      }
+      return ents;
+    }
+    if (!TRAFFIC || SCENE === 'garage') return [];
+    const car = (kind, z0, laneI, v, variant) => {
+      const zz = z0 + v * t, u = track.laneU(zz, laneI), dir = laneI >= n / 2 ? 0 : Math.PI;
+      ents.push([id++, KIND_ID[kind], +track.xAt(zz, u).toFixed(3), 0, +zz.toFixed(3), +(track.headingAt(zz) + dir).toFixed(4), variant, 0]);
+    };
+    const Z = num('z', 21000);
+    car('sedan', Z + 34, Math.min(n - 1, lane + 1), 6.5, 2); car('van', Z + 70, lane, 7, 1); car('bus', Z + 120, Math.min(n - 1, lane + 1), 6, 0);
+    car('hatch', Z + 55, Math.max(0, lane - 1), -9, 3); car('pickup', Z + 105, Math.max(0, lane - 2), -8, 2); car('sedan', Z + 160, Math.max(0, lane - 1), -9, 4);
+    for (let i = 0; i < 7; i++) {
+      const side = i % 2 ? 1 : -1, zz = Z + 16 + i * 13 + (i % 3) * 3 + (side > 0 ? 1 : -1) * 1.1 * t, u = side * (hw + sh + 1.4 + (i % 3) * 0.7);
+      ents.push([id++, KIND_ID.ped, +track.xAt(zz, u).toFixed(3), 0, +zz.toFixed(3), +(track.headingAt(zz) + (side > 0 ? 0 : Math.PI)).toFixed(4), i, 0]);
+    }
+    return ents;
+  };
   const mirrors = q.get('mirrors') === '0' ? null : new Mirrors(cab, { rvLength: view.rv?.size?.l || 8.6, rvHeight: view.rv?.size?.h || 3.4, hz: 30 });
   if (mirrors) view.addPreRender((renderer, scene, camera) => mirrors.render(renderer, scene, camera, 0.1));
   view.setCameraController({ name: 'r3cab', update: (dt, camera) => placeCamera(camera, frame, cab.userData) });
   caption(cab);
-  const frameN = (k = 1) => { for (let i = 0; i < k; i++) { view.pushSnapshot(snap); view.render(1 / 30); } };
-  Object.assign(api, { cab, view, frame: frameN, stats: () => ({ ...view.stats, cab: statsOf(cab) }) });
+  // ── trinkets + the scripted drive (fixed 1/120 s physics step) ──
+  const trinkets = new Trinkets(cab);
+  let simT = SIM ? -1.6 : 0;
+  const H = 1 / 120;
+  const step = (h) => {
+    simT += h;
+    const sc = scenario(simT);
+    if (SCENE !== 'garage') z += sc.speed * h;
+    snap.rv.speed = sc.speed; snap.feel.bump = sc.bump; snap.feel.latAcc = sc.lat;
+    trinkets.update(h, { speed: sc.speed, accel: sc.accel, latAcc: sc.lat, bump: sc.bump });
+    // FirstPersonDriver's head bob (rising bump edge → dip, stiff spring back)
+    if (sc.bump > camBob.prevBump + 0.05) camBob.v -= (sc.bump - camBob.prevBump) * 1.6;
+    camBob.prevBump = sc.bump;
+    camBob.v += (-camBob.y * 160 - camBob.v * 11) * h;
+    camBob.y = Math.max(-0.09, Math.min(0.07, camBob.y + camBob.v * h));
+  };
+  const sync = () => { if (SCENE !== 'garage') poseRv(); snap.ents = traffic(Math.max(0, simT + 1.6)); snap.t = simT; };
+  /** Advance the scripted drive by dt (physics at 1/120 s, the view at ≤1/60 s), then draw one frame. */
+  const advance = (dt = 1 / 12, { draw = true } = {}) => {
+    const nV = Math.max(1, Math.round(dt / (1 / 60))), per = Math.max(1, Math.round(dt / nV / H));
+    for (let i = 0; i < nV; i++) {
+      for (let j = 0; j < per; j++) step(H);
+      sync(); view.pushSnapshot(snap); view.render(dt / nV, { draw: draw && i === nV - 1 });
+    }
+    api.simT = simT;
+  };
+  const frameN = (k = 1) => { for (let i = 0; i < k; i++) { sync(); view.pushSnapshot(snap); view.render(1 / 30); } };
+  Object.assign(api, { cab, view, trinkets, frame: frameN, advance, stats: () => ({ ...view.stats, cab: statsOf(cab) }) });
   frameN(2);
   for (let i = 0; i < 40 && !view.isSettled(); i++) { frameN(1); await new Promise((r) => setTimeout(r, 30)); }
+  // pre-roll: settle the springs (and the scripted drive) up to ?t= (stills)
+  if (SIM) { const tEnd = num('t', -0.05); while (simT < tEnd - 1e-6) advance(Math.min(1 / 12, tEnd - simT), { draw: false }); }
   frameN(8);                                  // let every visible mirror get a pass
   api.done = true;
 }
