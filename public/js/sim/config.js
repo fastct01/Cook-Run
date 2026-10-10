@@ -47,8 +47,10 @@ export const SIM_DEFAULTS = {
     biomes: ['saltflats'],  // biomes the rival chases in (it gives up elsewhere)
   },
   peds: {
-    windowBehind: 50, windowAhead: 300, spawnAhead: [150, 280], maxPeds: 26,
+    windowBehind: 50, windowAhead: 300, spawnAhead: [150, 280], maxPeds: 34,
     jaywalkChance: 0.12, crossGroupChance: 0.75, crossGroupSize: [2, 4], crossTriggerAhead: [100, 150],
+    // runners: share of spawned peds that sprint across when the RV is reactSeconds away (≥ minRange m)
+    runners: { chance: 0.22, reactSeconds: [2.2, 3.5], runSpeed: [3.4, 4.6], minRange: 30, hornCancelRange: 50 },
     panicSeconds: 3, getUpSeconds: 1.2, groundFriction: 6,
   },
   obstacles: {

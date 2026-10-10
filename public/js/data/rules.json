@@ -715,8 +715,21 @@
     150,
     280
    ],
-   "maxPeds": 26,
+   "maxPeds": 34,
    "jaywalkChance": 0.12,
+   "runners": {
+    "chance": 0.22,
+    "reactSeconds": [
+     2.2,
+     3.5
+    ],
+    "runSpeed": [
+     3.4,
+     4.6
+    ],
+    "minRange": 30,
+    "hornCancelRange": 50
+   },
    "crossGroupChance": 0.75,
    "crossGroupSize": [
     2,

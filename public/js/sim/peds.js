@@ -1,7 +1,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // PedSystem: slapstick pedestrians (adults only, variants 0..7).
 //  • Spawn on sidewalks / roadside per biome.pedPer100m (frontier sweep ahead).
-//  • Some walk along, some cross at intersections in groups, a few jaywalk.
+//  • Some walk along, some cross at intersections in groups, a few jaywalk, and runners wait on the
+//    sidewalk and sprint across when the RV is a few seconds away (anywhere along the street);
+//    honking before they go keeps them on the sidewalk.
 //  • Horn → peds within hornScareRadius panic and run off the road.
 //  • RV hit at ≥ knockMinSpeed → airborne arc with spin (2) → dazed (3) →
 //    getting up (4) → walk away (0) / run (1). Scored once per ped.
@@ -79,10 +81,17 @@ export class PedSystem {
     // keep the garage door → road crossing clear at the start
     const gar = sim.structures && sim.structures.garage;
     if (gar && side === gar.side && Math.abs(zz - gar.cz) < 32) return;
+    const R = C.runners;
     if (j < C.jaywalkChance) {
       // jaywalker: waits at the kerb, steps out when the RV gets within ~60-120 m
       const ped = this.spawnPed(zz, side * (road.hw(zz) + 0.5), 'jay', { targetU: -side * (u0 + 1) });
       ped.jayRange = 60 + rng.float(0, 60);
+    } else if (R && j < C.jaywalkChance + R.chance) {
+      // runner: strolls on the sidewalk, then sprints across when the RV is react seconds away
+      const ped = this.spawnPed(zz, u, 'dash');
+      ped.react = rng.float(R.reactSeconds[0], R.reactSeconds[1]);
+      ped.runSpeed = rng.float(R.runSpeed[0], R.runSpeed[1]);
+      ped.dashTo = -side * (u0 + rng.float(0.3, 1.2));
     } else this.spawnPed(zz, u, 'walk');
   }
 
@@ -160,6 +169,10 @@ export class PedSystem {
             if (Math.abs(d) < 0.3) dzv = p.dirZ;
           } else if (p.mode === 'jay') {
             if (p.z - rv.z < p.jayRange && p.z > rv.z) p.mode = 'cross';
+          } else if (p.mode === 'dash' && rv.horn && p.z > rv.z && p.z - rv.z < C.runners.hornCancelRange) {
+            p.mode = 'walk';   // heard the horn: thinks better of it and stays on the sidewalk
+          } else if (p.mode === 'dash' && p.z > rv.z && p.z - rv.z < Math.max(C.runners.minRange, rv.speed * p.react)) {
+            p.mode = 'cross'; p.speed = p.runSpeed; p.targetU = p.dashTo;
           } else {
             dzv = p.dirZ;
             const d = p.targetU - u;

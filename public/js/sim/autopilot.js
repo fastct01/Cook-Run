@@ -359,7 +359,8 @@ export class Autopilot {
       const eu = road.uAt(e[2], e[4]);
       if (kind === 'ped') {
         // the bot leans on the horn instead of braking for pedestrians (they panic and run)
-        if (st <= 1 && along > 0 && along < 45 && Math.abs(eu - rvU) < 8) pedAhead = true;
+        // (out to ~70 m and the far sidewalk: a runner waiting at the kerb stays put when it hears the horn)
+        if (st <= 1 && along > 0 && along < 70 && Math.abs(eu - rvU) < 11) pedAhead = true;
         if (st >= 2) continue;
       }
       if (kind === 'flashbang' && st !== 1) continue;
