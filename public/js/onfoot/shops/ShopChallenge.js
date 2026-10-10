@@ -3,7 +3,7 @@
 //
 //   const shop = new ShopChallenge(view, stopDef, data, { onDone(score), onAbort(), hudRoot });
 //   shop.update(dt)            every frame (logic; it also self-drives if you forget, via the scene override)
-//   shop.onKey(e, down) → bool keydown/keyup while shopping (WASD/arrows, Shift, E/Space/Enter, R/F, Esc)
+//   shop.onKey(e, down) → bool keydown/keyup while shopping (WASD/arrows, Shift, E/Enter, Space = jump, R/F, Esc)
 //   shop.destroy()             after onDone / onAbort (releases view.setSceneOverride and the DOM)
 // Pointer: left click / tap on view.renderer.domElement = E.
 // Types (stopDef.shop.type): collect (+ variant 'trolley'), haggle, forklift, pump, goat, crane, alarm.

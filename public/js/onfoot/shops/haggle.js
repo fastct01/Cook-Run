@@ -73,8 +73,10 @@ export class HaggleChallenge extends ShopBase {
     // colliders
     const W = this.world;
     W.bounds = { x0: -10, x1: 10, z0: -7, z1: 7 };
-    W.box(-2.2, 2.2, -5.5, -1.75, 'stall'); W.box(-8.6, -4.2, -5.5, -1.75, 'stall'); W.box(4.2, 8.6, -5.5, -1.75, 'stall');
-    W.box(-10, -5.5, 0.2, 4.6, 'stall'); W.box(5.5, 10, 0.2, 4.6, 'stall');
+    // stall bodies are ~3.2 × 2.0 m, set 0.2 m back from the model origin (measured from market_stall)
+    W.box(-1.65, 1.65, -4.8, -2.8, 'stall'); W.box(-8.05, -4.75, -4.8, -2.8, 'stall'); W.box(4.75, 8.05, -4.8, -2.48, 'stall');
+    W.box(-10, -5.7, 0.75, 4.05, 'stall'); W.box(6.55, 10, 0.75, 4.05, 'stall');
+    W.circle(0, -2.75, 0.3, 'vendor');
     W.box(-8.9, -4.9, 5.55, 6.3, 'produce');
     this.custC = this.customers.map((c) => W.circle(c.x, c.z, 0.3, 'customer'));
     this.pileC = W.circle(PILE.x, PILE.z, 0.4, 'crates');
@@ -103,6 +105,7 @@ export class HaggleChallenge extends ShopBase {
     this.g.n.textContent = `${this.round + 1}/${rounds}`;
   }
 
+  get spaceActs() { return this.stage === 'haggle' || super.spaceActs; }
   step(h) {
     const R = this.rook, rounds = this.shop.rounds || 3;
     this.cd = Math.max(0, this.cd - h);

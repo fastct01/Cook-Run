@@ -10,12 +10,15 @@
 //   doc.startWork(stationId) / doc.stopWork()
 //   doc.setDown(bool)                    // lab.cookDown → lies on the floor
 //   doc.bumpImpulse(power)               // extra bump source (e.g. hard landing)
+//   doc.jump() → bool                    // Space: hop (not while working / stumbling / down; buffered just before landing)
 //   doc.update(dt, { latAcc, bump })     // snap.feel
 //   doc.nearestStation() → { id, dist } | null    (within doc.interactRadius of its stand point)
-//   doc.drainEvents() → [{ type: 'arrived'|'stumble'|'hop'|'recovered', ... }]
+//   doc.drainEvents() → [{ type: 'arrived'|'stumble'|'hop'|'recovered'|'jump'|'land', ... }]
 // State: 'idle' | 'walking' | 'working' | 'stumbling' | 'down'
 // Van-local axes: +X = driver's left, +Z = front. Facing yaw: forward = (sin yaw, cos yaw).
 // ─────────────────────────────────────────────────────────────────────────────
+
+import { JUMP, tryJump, stepJump, resetJump } from '../shared/jump.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -56,6 +59,9 @@ export class DocController {
     this.workStation = null;
     this.stumbleT = 0; this.stumbleDir = 1;
     this.hopT = 0; this.hopPow = 0;
+    // jump arc (shared/jump.js); the van ceiling leaves ~0.6 m of headroom over Doc's head
+    this.J = { ...JUMP, height: d.jumpHeight ?? 0.45, time: d.jumpTime ?? 0.43 };
+    this.jt = -1; this.jumpBuf = 0; this.y = 0;
     this.lean = 0; this.leanV = 0;       // visual lean (m) while working / pushed
     this.walkPhase = 0;
     this.prevBump = 0; this.bumpCd = 0;
@@ -191,11 +197,19 @@ export class DocController {
   setDown(down) {
     if (down && this.state !== 'down') {
       this.workStation = null; this.cancelPath();
-      this.state = 'down'; this.down = true; this.vx = this.vz = 0;
+      this.state = 'down'; this.down = true; this.vx = this.vz = 0; resetJump(this);
     } else if (!down && this.state === 'down') {
       this.state = 'idle'; this.down = false;
       this.events.push({ type: 'recovered' });
     }
+  }
+
+  get airborne() { return this.jt >= 0; }
+  jump() {
+    if (this.state === 'down' || this.state === 'working' || this.state === 'stumbling') return false;
+    const now = tryJump(this, this.J);
+    if (now) this.events.push({ type: 'jump' });
+    return now;
   }
 
   // ── van motion ─────────────────────────────────────────────────────────────
@@ -223,7 +237,7 @@ export class DocController {
     }
   }
   /** Visual hop height (m) right now. */
-  get hop() { return this.hopT > 0 ? Math.sin((1 - this.hopT / 0.3) * Math.PI) * 0.16 * this.hopPow : 0; }
+  get hop() { return (this.hopT > 0 ? Math.sin((1 - this.hopT / 0.3) * Math.PI) * 0.16 * this.hopPow : 0) + this.y; }
 
   // ── step ───────────────────────────────────────────────────────────────────
   update(dt, feel = {}) {
@@ -235,6 +249,11 @@ export class DocController {
     const b = +feel.bump || 0;
     if (b > 0.2 && b - this.prevBump > 0.12) this.bumpImpulse(b);
     this.prevBump = b;
+    if (this.jt >= 0 || this.jumpBuf > 0) {
+      const can = this.state !== 'down' && this.state !== 'working' && this.state !== 'stumbling';
+      const ev = stepJump(this, dt, can, this.J);
+      if (ev) this.events.push({ type: ev });
+    }
     // lateral push from cornering: latAcc = speed·yawRate (+ = turning left toward +X) →
     // Doc is thrown to the OUTSIDE of the turn, i.e. along −X for a positive latAcc.
     const S = this.sway;
@@ -274,7 +293,7 @@ export class DocController {
         want = Math.min(1, l) * this.walkSpeed; dx /= l; dz /= l;
         // the aisle is narrow and the camera sees it from the side, so most screen directions run into a
         // counter: walk along it at full speed instead of crawling at the leftover component
-        if (!this.inside(this.x + dx * 0.1, this.z + dz * 0.1)) ({ x: dx, z: dz } = this._slideDir(dx, dz));
+        if (!this.inside(this.x + dx * 0.03, this.z + dz * 0.03)) ({ x: dx, z: dz } = this._slideDir(dx, dz));
       }
     } else if (this.path.length) {
       const w = this.path[0];
@@ -293,7 +312,7 @@ export class DocController {
       }
     }
     const tvx = dx * want, tvz = dz * want;
-    const ax = tvx - this.vx, az = tvz - this.vz, al = Math.hypot(ax, az), step = this.accel * dt;
+    const ax = tvx - this.vx, az = tvz - this.vz, al = Math.hypot(ax, az), step = this.accel * dt * (this.jt >= 0 ? this.J.airControl : 1);
     if (al > step) { this.vx += (ax / al) * step; this.vz += (az / al) * step; } else { this.vx = tvx; this.vz = tvz; }
     if (this.state === 'stumbling') { this.vx *= Math.exp(-dt * 5); this.vz *= Math.exp(-dt * 5); }
     // sway velocity (eases toward the cornering push; stumble impulse decays)
@@ -317,7 +336,7 @@ export class DocController {
   }
   /** Blocked move direction → the free axis it leans toward (unit), or unchanged in a corner. */
   _slideDir(dx, dz) {
-    const P = 0.1, MIN = 0.2;   // probe distance (m) · smallest component that still slides
+    const P = 0.03, MIN = 0.2;   // probe distance (m) · smallest component that still slides
     const canX = Math.abs(dx) >= MIN && this.inside(this.x + Math.sign(dx) * P, this.z);
     const canZ = Math.abs(dz) >= MIN && this.inside(this.x, this.z + Math.sign(dz) * P);
     if (canZ && (!canX || Math.abs(dz) >= Math.abs(dx))) return { x: 0, z: Math.sign(dz) };
@@ -332,6 +351,6 @@ export class DocController {
   drainEvents() { const e = this.events; this.events = []; return e; }
   /** Plain-data snapshot (debug / tests). */
   toJSON() {
-    return { x: +this.x.toFixed(3), z: +this.z.toFixed(3), yaw: +this.yaw.toFixed(3), state: this.state, work: this.workStation, path: this.path.length, speed: +this.speed.toFixed(2), push: +this.pushVx.toFixed(3) };
+    return { x: +this.x.toFixed(3), z: +this.z.toFixed(3), yaw: +this.yaw.toFixed(3), state: this.state, y: +this.y.toFixed(3), work: this.workStation, path: this.path.length, speed: +this.speed.toFixed(2), push: +this.pushVx.toFixed(3) };
   }
 }

@@ -26,6 +26,7 @@ Play online with a friend (one drives, one cooks), or solo: press Tab to climb i
 | --- | --- |
 | W A S D or arrows | Walk (relative to the camera) |
 | Shift | Run |
+| Space | Jump |
 | E (tap or hold) | Use: take the keys, the notebook or the crate, hit the door button, climb in, crank the engine |
 | Mouse drag / wheel | Turn and zoom the camera |
 | Skip tutorial button | Driver (host) only |
@@ -53,7 +54,8 @@ Play online with a friend (one drives, one cooks), or solo: press Tab to climb i
 | --- | --- |
 | W A S D or arrows | Move Rook (or the forklift, trolley, crane) |
 | Shift | Run |
-| E, Space, Enter or click | Interact (grab, haggle, pump, drop the magnet…) |
+| Space | Jump (in the forklift or crane, and while haggling, Space interacts instead) |
+| E, Enter or click | Interact (grab, haggle, pump, drop the magnet…) |
 | R / F | Forklift forks up / down |
 | Esc | Give up the shop (no supplies) |
 
@@ -62,7 +64,8 @@ Play online with a friend (one drives, one cooks), or solo: press Tab to climb i
 | Input | Action |
 | --- | --- |
 | W A S D or arrows | Walk (W = up the screen) |
-| E or Space | Use the station you're at: open the recipe board, start the step, switch the vent fan or curtains, grab or spray the extinguisher, beat out a fire |
+| Space | Jump (at a station Space still works the step, e.g. hold to pour) |
+| E | Use the station you're at: open the recipe board, start the step, switch the vent fan or curtains, grab or spray the extinguisher, beat out a fire |
 | Q or Esc | Step away from the station, or put the extinguisher down |
 | Click the floor | Walk there |
 | Click a station | Walk there and use it |

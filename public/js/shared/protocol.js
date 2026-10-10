@@ -51,6 +51,7 @@ export const CMD = Object.freeze({
   ROOF_THROW: 'roofThrow',     // { type, device: 'firecracker'|'balloon'|'flare', x, z }   world target point on the ground
   AVATAR_MOVE: 'avatarMove',   // { type, mx, mz, run }           garage tutorial: Doc's world-space move vector (-1..1), ~15 Hz
   AVATAR_ACT: 'avatarAct',     // { type }                         garage tutorial: Doc presses E (pick up / use / get in)
+  AVATAR_JUMP: 'avatarJump',   // { type }                         garage tutorial: Doc presses Space (jump)
 });
 
 // Driver-side commands (host-local, never sent over the network): sim.applyDriverCommand(cmd)
@@ -148,7 +149,7 @@ LabState (cook → host at 6 Hz):
   fumes: 0..1, fire: 0..1, ventOpen: bool, curtains: bool, cookHurt: number (hp lost since last send) }
 
 ── Expansion snapshot fields (EXPANSION_CONTRACT.md is the full spec) ──
-  garage:   null | { step, stepId, rook:{x,z,yaw,speed,carry,inRv}, doc:{x,z,yaw,speed,carry,inRv},
+  garage:   null | { step, stepId, rook:{x,z,yaw,speed,carry,inRv,y,jt}, doc:{x,z,yaw,speed,carry,inRv,y,jt},
                      items:{ keys, notebook, crate, plug, door: 0..1, engine: 'off'|'cranking'|'on' }, prompt:{ rook, doc } }
   stop:     null | { id, name, state:'parked'|'shopping'|'returning'|'loading'|'done', shopType, shopT, loadT, progress,
                      blocked, copDist, roof:{ active, aimYaw, aimPitch, spray, ammo:{ firecracker, balloon, flare } } }

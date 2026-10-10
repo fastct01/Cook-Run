@@ -594,6 +594,11 @@ export class VanLab3D {
       if (isDown) this.held.add(code); else this.held.delete(code);
       return true;
     }
+    // Space = jump, except where it already means something: at a station (hold to pour, the board) or spraying
+    if (code === 'Space' && doc.state !== 'working' && this.ext.state !== 'hand') {
+      if (isDown && !e.repeat) this.jump();
+      return true;
+    }
     if (code === 'KeyE' || code === 'Space') {
       if (!isDown) {
         this.held.delete(code); this._stopSpray();
@@ -634,6 +639,11 @@ export class VanLab3D {
       return code === 'KeyQ';
     }
     return false;
+  }
+
+  jump() {
+    if (!this.active || (this.roof && this.roof.ownsDoc) || this.lab.cookDown) return false;
+    return this.doc.jump();
   }
 
   _bind() {
@@ -857,6 +867,12 @@ class DocAvatar {
       alz = -0.15; arz += 0.15;
       bodyX = 0.12; headX = 0.35;
       ll = lr = 0;
+    }
+    if (doc.airborne && doc.state !== 'working') { // jump: legs tucked, arms out
+      const k = Math.min(1, doc.y / 0.18);
+      ll = ll * (1 - k) - 0.9 * k; lr = lr * (1 - k) + 0.25 * k;
+      al = al * (1 - k) - 1.1 * k; ar = ar * (1 - k) - 1.1 * k; alz = -0.35 * k; arz = 0.35 * k;
+      m.position.y = D.FY + doc.hop;
     }
     if (ctx.ext.state === 'hand') {
       ar = ctx.ext.spraying ? -1.35 + Math.sin(t * 30) * 0.03 : -0.35;

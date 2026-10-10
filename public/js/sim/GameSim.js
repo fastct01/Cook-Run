@@ -128,12 +128,12 @@ const RoofCls = ROOF_MOD?.RoofDefence ?? StubRoof;
 
 const EVENT_CAP = 256;
 const _con = { nx: 0, nz: 0, depth: 0, px: 0, pz: 0 };
-const NO_INPUT = Object.freeze({ throttle: 0, steer: 0, handbrake: false, horn: false, smoke: false, oil: false, nitro: false, reset: false, moveX: 0, moveZ: 0, interact: false });
+const NO_INPUT = Object.freeze({ throttle: 0, steer: 0, handbrake: false, horn: false, smoke: false, oil: false, nitro: false, reset: false, moveX: 0, moveZ: 0, interact: false, jump: false });
 const HOLD_INPUT = Object.freeze({ ...NO_INPUT, handbrake: true });
 const FX_DECAY = { fog: 0.45, flash: 1.4, shock: 2.2 };
 const FX_KEYS = ['fog', 'flash', 'shock'];
 const ROOF_CMDS = new Set(['roofEnter', 'roofLeave', 'roofAim', 'roofThrow']);
-const AVATAR_CMDS = new Set(['avatarMove', 'avatarAct']);
+const AVATAR_CMDS = new Set(['avatarMove', 'avatarAct', 'avatarJump']);
 
 export class GameSim {
   constructor(data, opts = {}) {
@@ -265,7 +265,7 @@ export class GameSim {
     if (!(dt > 0)) return;
     const n = Math.max(1, Math.min(8, Math.ceil(dt / FIXED_DT - 1e-6)));
     const h = dt / n;
-    for (let i = 0; i < n; i++) this._tick(i === 0 ? input : { ...input, smoke: false, oil: false, nitro: false, reset: false, interact: false }, h);
+    for (let i = 0; i < n; i++) this._tick(i === 0 ? input : { ...input, smoke: false, oil: false, nitro: false, reset: false, interact: false, jump: false }, h);
   }
 
   applyCookCommand(cmd) {

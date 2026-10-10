@@ -4,8 +4,8 @@
 //
 //   const g = new GarageTutorial(sim);     // sim: { track, route|data, solo, emit(ev) } (GameSim helper API)
 //   g.update(dt, driverInput);             // Rook: input.moveX/moveZ (world, −1..1), input.run,
-//                                          //       input.interact (edge), input.interactHeld (level, optional)
-//   g.command(cmd);                        // Doc:  CMD.avatarMove { mx, mz, run } (world) · CMD.avatarAct {}
+//                                          //       input.interact (edge), input.interactHeld (level, optional), input.jump (edge)
+//   g.command(cmd);                        // Doc:  CMD.avatarMove { mx, mz, run } (world) · CMD.avatarAct {} · CMD.avatarJump {}
 //   g.skip();                              // DCMD.skipTutorial → everything done, both in the RV, engine on
 //   g.state();                             // → snapshot.garage (EXPANSION_CONTRACT.md "Snapshot additions")
 //   g.done                                 // true once the engine is running (SIM-CORE → phase 'countdown')
@@ -24,6 +24,8 @@
 // Unity port: one MonoBehaviour (GarageTutorial) + a static GarageLayout; avatars are kinematic
 // CharacterControllers fed by the same velocity model (moveAvatar), colliders are the BOXES/CIRCLES below.
 // ─────────────────────────────────────────────────────────────────────────────
+
+import { JUMP, tryJump, stepJump, resetJump } from '../shared/jump.js';
 
 export const STEPS = Object.freeze(['markers', 'grab', 'load', 'door', 'board', 'crank']);
 
@@ -158,7 +160,7 @@ export function moveAvatar(av, mx, mz, run, dt, extra = null, cfg = DEF) {
   if (l > 1) { mx /= l; mz /= l; l = 1; }
   const max = av.carry ? cfg.carry : run ? cfg.run : cfg.walk;
   const tvx = mx * max, tvz = mz * max;
-  const ax = tvx - av.vx, az = tvz - av.vz, al = Math.hypot(ax, az), step = cfg.accel * dt;
+  const ax = tvx - av.vx, az = tvz - av.vz, al = Math.hypot(ax, az), step = cfg.accel * dt * (av.jt >= 0 ? JUMP.airControl : 1);
   if (al > step) { av.vx += (ax / al) * step; av.vz += (az / al) * step; } else { av.vx = tvx; av.vz = tvz; }
   const px = av.x, pz = av.z;
   const p = { x: av.x + av.vx * dt, z: av.z + av.vz * dt };
@@ -270,7 +272,7 @@ const PROMPTS = {
 
 function newAvatar(s) {
   return { x: s.x, z: s.z, yaw: s.yaw, vx: 0, vz: 0, speed: 0, walkPhase: 0, carry: null, inRv: false, act: 0,
-    atMarker: false };
+    atMarker: false, jt: -1, jumpBuf: 0, y: 0 };
 }
 
 export class GarageTutorial {
@@ -297,6 +299,7 @@ export class GarageTutorial {
     this.crankT = 0; this.caught = false; this.onT = 0;
     this.docIn = { mx: 0, mz: 0, run: false, t: -1e9 };   // last CMD.avatarMove (local dir)
     this.docAct = false;
+    this.docJump = false;
     this.feedback = [];            // short-lived per-action markers for the view: {who, what, t}
     this.seq = 0;
     // solo AI
@@ -320,6 +323,9 @@ export class GarageTutorial {
     } else if (cmd.type === 'avatarAct') {
       if (this.solo) return;
       this.docAct = true;
+    } else if (cmd.type === 'avatarJump') {
+      if (this.solo) return;
+      this.docJump = true;
     }
   }
 
@@ -328,7 +334,7 @@ export class GarageTutorial {
     this.skipped = true;
     for (const k of STEPS) this.complete[k] = true;
     Object.assign(this.items, { keys: 'rook', notebook: 'doc', crate: 'rv', plug: 'out', door: 1, engine: 'on' });
-    for (const a of [this.R, this.D]) { a.inRv = true; a.carry = null; a.vx = a.vz = a.speed = 0; }
+    for (const a of [this.R, this.D]) { a.inRv = true; a.carry = null; a.vx = a.vz = a.speed = 0; resetJump(a); }
     Object.assign(this.R, LAYOUT.use.driverDoor); Object.assign(this.D, LAYOUT.use.sideDoor);
     this.done = true;
     this._emit({ type: 'tutorial', step: STEPS.length, stepId: 'skipped', done: 'skipped' });
@@ -357,13 +363,18 @@ export class GarageTutorial {
     const rHeld = !!input.interactHeld;
 
     // Doc's input
-    let dmx = 0, dmz = 0, dRun = false, dAct = false;
+    let dmx = 0, dmz = 0, dRun = false, dAct = false, dJump = false;
     if (this.ai) ({ mx: dmx, mz: dmz, run: dRun, act: dAct } = this._aiStep(dt));
     else {
       if (this.t - this.docIn.t <= this.cfg.cmdTimeout) { dmx = this.docIn.mx; dmz = this.docIn.mz; dRun = this.docIn.run; }
       dAct = this.docAct;
+      dJump = this.docJump;
     }
-    this.docAct = false;
+    this.docAct = false; this.docJump = false;
+
+    // jump (an edge; buffered if pressed just before landing)
+    if (input.jump && !R.inRv) tryJump(R);
+    if (dJump && !D.inRv) tryJump(D);
 
     // move (each sees the other + the crate on the floor as circles)
     const crateC = this.items.crate === 'floor' ? [[this.crate.x, this.crate.z, this.cfg.crateRadius]] : [];
@@ -371,6 +382,7 @@ export class GarageTutorial {
     else { R.vx = R.vz = R.speed = 0; }
     if (!D.inRv) moveAvatar(D, dmx, dmz, dRun, dt, R.inRv ? crateC : crateC.concat([[R.x, R.z, this.cfg.radius]]), this.cfg);
     else { D.vx = D.vz = D.speed = 0; }
+    for (const a of [R, D]) { if (a.inRv) resetJump(a); else stepJump(a, dt); }
 
     // step 0: markers (sticky once reached)
     const M = LAYOUT.markers;
@@ -517,7 +529,7 @@ export class GarageTutorial {
   // ── output ────────────────────────────────────────────────────────────────
   _worldAv(a) {
     const p = this.frame.toWorld(a.x, a.z);
-    return { x: r3(p.x), z: r3(p.z), yaw: r3(this.frame.yawToWorld(a.yaw)), speed: r3(a.speed), carry: a.carry, inRv: a.inRv, act: r3(a.act) };
+    return { x: r3(p.x), z: r3(p.z), yaw: r3(this.frame.yawToWorld(a.yaw)), speed: r3(a.speed), carry: a.carry, inRv: a.inRv, act: r3(a.act), y: r3(a.y), jt: r3(a.jt) };
   }
   _target(who) {
     const U = LAYOUT.use;

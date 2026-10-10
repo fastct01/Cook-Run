@@ -169,7 +169,7 @@ export class CollectChallenge extends ShopBase {
     const km = k.mesh('kiosk'); S.add(km);
     const sign = textSign('selfcheck', 'SELF CHECKOUT', 1.3, 0.3, { bg: '#2f5f8a', fg: '#efe9dc', px: 80 });
     sign.position.set(KIOSK.x, 2.5, KIOSK.z + 0.05); sign.rotation.y = Math.PI; S.add(sign);
-    W.box(KIOSK.x - 1.2, KIOSK.x + 0.5, KIOSK.z - 0.3, KIOSK.z + 0.35, 'kiosk');
+    W.box(KIOSK.x - 0.5, KIOSK.x + 1.1, KIOSK.z - 0.3, KIOSK.z + 0.3, 'kiosk');   // built under a π turn: the bagging shelf is at +x
     this.walkSpeed = 2.4; this.runSpeed = 3.4;
   }
 

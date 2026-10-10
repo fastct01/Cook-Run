@@ -78,10 +78,10 @@ export class ForkliftChallenge extends ShopBase {
 
     // colliders
     const W = this.world;
-    W.bounds = { x0: -13, x1: 13.6, z0: -12, z1: 12 };
+    W.bounds = { x0: -15.8, x1: 13.9, z0: -12, z1: 12 };
     W.box(3.65, 6.35, 2.15, 10.85, 'rv');
-    W.box(-18, -11.2, -3, 9, 'containers'); W.box(-4, 12, -22, -10, 'containers');
-    W.box(8.5, 12.5, -9.4, -4.6, 'crates'); W.box(-14, -8, 8, 12, 'crates');
+    W.box(-18, -13.75, -3.1, 9.1, 'containers'); W.box(-2.1, 10.1, -22, -11.0, 'containers');
+    W.box(8.6, 11.4, -9.7, -3.95, 'crates'); W.box(11.4, 11.95, -9.7, -8.0, 'crates'); W.box(-14, -7.8, 8.8, 12, 'crates');
     this.rackBox = W.box(RACK.x - RACK.w / 2, RACK.x + RACK.w / 2, RACK.z - RACK.d / 2, RACK.z + RACK.d / 2, 'rack');
     this.dockC = W.circle(11.2, 1.5, 0.3, 'worker');
 

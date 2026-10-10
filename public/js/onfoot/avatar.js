@@ -4,7 +4,7 @@
 // Same rig conventions as the van's DocAvatar (rotation.x < 0 swings a limb FORWARD).
 //
 //   const a = new Avatar(createModel('driver'));  parent.add(a.root);
-//   a.set({ x, z, yaw, speed, carry: null|'crate'|'box'|'sack'|'push'|'notebook'|'keys'|'phone'|'wheel', act: 0..0.4, run })
+//   a.set({ x, z, y, yaw, speed, carry: null|'crate'|'box'|'sack'|'push'|'notebook'|'keys'|'phone'|'wheel', act: 0..0.4, run })
 //   a.update(dt)                       // advances the cycle from `speed`
 //   a.carryAnchor (in front of the belly, moves with the body) · a.handR (right hand)
 // Unity: an Animator with a 1D blend tree (idle → walk → run on speed) + carry/push layers.
@@ -72,6 +72,12 @@ export class Avatar {
     if (s.crouch > 0) { const k = s.crouch; bodyX += 0.5 * k; ll -= 0.6 * k; lr -= 0.6 * k; y -= 0.18 * k; headX -= 0.3 * k; }
     if (s.wave > 0) { al = -2.7 + Math.sin(t * 14) * 0.35; alz = 0.3; }
     if (s.cheer > 0) { const k = clamp(s.cheer, 0, 1); al = al * (1 - k) - 2.9 * k; ar = ar * (1 - k) - 2.9 * k; alz = 0.25 * k; arz = -0.25 * k; y += Math.abs(Math.sin(t * 9)) * 0.12 * k; }
+    if ((s.y || 0) > 0.02) { // airborne: legs tucked, arms out (unless the hands are full), no walk bob
+      const k = clamp(s.y / 0.2, 0, 1);
+      ll = ll * (1 - k) - 0.9 * k; lr = lr * (1 - k) + 0.25 * k;
+      if (!c) { al = al * (1 - k) - 1.1 * k; ar = ar * (1 - k) - 1.1 * k; alz = -0.35 * k; arz = 0.35 * k; }
+      bodyX = bodyX * (1 - k) + 0.1 * k; y = 0;
+    }
     if (s.slip > 0) { const k = clamp(s.slip, 0, 1); al = -2.2 * k + al * (1 - k); ar = -1.8 * k + ar * (1 - k); alz = 0.9 * k; arz = -0.9 * k; bodyZ = Math.sin(t * 16) * 0.25 * k; }
     this.root.position.set(s.x, (s.y || 0) + y, s.z);
     this.root.rotation.set(0, s.yaw, 0);

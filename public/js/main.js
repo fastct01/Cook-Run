@@ -390,7 +390,7 @@ class Session {
   }
 
   driverInput() {
-    const NEUTRAL = { throttle: 0, steer: 0, handbrake: false, horn: false, smoke: false, oil: false, nitro: false, reset: false };
+    const NEUTRAL = { throttle: 0, steer: 0, handbrake: false, horn: false, smoke: false, oil: false, nitro: false, reset: false, jump: false };
     // garage tutorial: WASD walks Rook (relative to the garage camera); the demo bot skips it
     if (this.garage && !this.garage.finished && this.sim.phase === 'garage' && !(this.autopilot && !this.input.manualRecently)) {
       this.input.consume();   // drop driving edges
@@ -577,10 +577,10 @@ class Session {
       ['W / ↑', 'Accelerate'], ['S / ↓', 'Brake / reverse'], ['A D / ← →', 'Steer'], ['Space', 'Handbrake'],
       ['H', 'Horn (scares pedestrians off the road)'], ['Q', 'Smoke bomb'], ['E', 'Oil slick'], ['Shift', 'Nitro'],
       ['C', 'Look around outside the RV (3 s, every 30 s)'], ['Mouse', 'Turn your head in the cab (click for mouse-look)'],
-      ['R', 'Reset if stuck'], ['Tab', this.van ? 'Swap seats: go cook in the back (AI drives)' : 'Show / hide the lab'], ['M', 'Mute'], ['Esc / P', 'Pause'],
-      ...(this.van ? [['— in the van —', ''], ['WASD / ↑↓←→', 'Walk Doc around the lab'], ['E / Space', 'Use a station / work the step'], ['Q / Esc', 'Step away'], ['Click', 'Walk there / use · drag to cook'], ['Wheel', 'Zoom']] : []),
+      ['R', 'Reset if stuck'], ['On foot', 'WASD walk · Shift run · E use · Space jump'], ['Tab', this.van ? 'Swap seats: go cook in the back (AI drives)' : 'Show / hide the lab'], ['M', 'Mute'], ['Esc / P', 'Pause'],
+      ...(this.van ? [['— in the van —', ''], ['WASD / ↑↓←→', 'Walk Doc around the lab'], ['Space', 'Jump'], ['E', 'Use a station / work the step'], ['Q / Esc', 'Step away'], ['Click', 'Walk there / use · drag to cook'], ['Wheel', 'Zoom']] : []),
     ] : this.van ? [
-      ['WASD / ↑↓←→', 'Walk Doc around the lab'], ['E / Space', 'Use a station / work the step'], ['Q / Esc', 'Step away from a station'],
+      ['WASD / ↑↓←→', 'Walk Doc around the lab'], ['Space', 'Jump'], ['E', 'Use a station / work the step'], ['Q / Esc', 'Step away from a station'],
       ['Click', 'Walk there · click a station to use it'], ['Drag', 'Cook on the props (stir, pour, turn the knob…)'], ['1–7', 'Pick a recipe on the board'], ['Wheel', 'Zoom'],
       ['R', 'At a stop: climb onto the roof (mouse aims, hold click = hose, 1/2/3 + right-click = throw)'], ['M', 'Mute'],
     ] : [

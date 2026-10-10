@@ -3,9 +3,9 @@
 //
 //   const gv = new GarageView(view, data, { role: 'driver'|'cook', hudRoot, onSkip, solo });
 //   gv.update(dt, snap)            every frame (driver: sim.snapshot(); cook: the latest received snapshot)
-//   gv.onKey(e, down) → bool       feed keydown/keyup while snap.phase === 'garage' (WASD/arrows, Shift, E/Space/Enter)
-//   gv.consumeInput()              driver: → { moveX, moveZ, run, interact, interactHeld } (world space) — once per sim step
-//   gv.pollCommands(dt)            cook:   → CMD objects to send now (avatarMove ≈15 Hz, avatarAct on press)
+//   gv.onKey(e, down) → bool       feed keydown/keyup while snap.phase === 'garage' (WASD/arrows, Shift, E/Enter, Space = jump)
+//   gv.consumeInput()              driver: → { moveX, moveZ, run, interact, interactHeld, jump } (world space) — once per sim step
+//   gv.pollCommands(dt)            cook:   → CMD objects to send now (avatarMove ≈15 Hz, avatarAct / avatarJump on press)
 //   gv.cameraYaw                   world yaw the camera looks along (forward = (sin, cos)); WASD is relative to it
 //   gv.finished                    true once the phase left 'garage' and the fade-out is over → destroy()
 //   gv.destroy()
@@ -22,6 +22,7 @@ import { createModel, cloneInstanceMaterials } from '../assets/index.js';
 import { LAYOUT, STEPS, garageFrame, moveAvatar } from '../sim/garage.js';
 import { Track } from '../sim/track.js';
 import { CMD } from '../shared/protocol.js';
+import { jumpY, tryJump, stepJump, resetJump } from '../shared/jump.js';
 import { Avatar, PoseSmoother } from './avatar.js';
 import { OnfootHud, el, keycaps } from './hud.js';
 
@@ -118,7 +119,8 @@ export class GarageView {
     this.boardT = { rook: -1, doc: -1 };
     // local prediction state for MY avatar (cook side; harmless on the host)
     const s0 = LAYOUT.start[this.me];
-    this.pred = { x: s0.x, z: s0.z, yaw: s0.yaw, vx: 0, vz: 0, speed: 0, walkPhase: 0, carry: null, idleT: 0 };
+    this.pred = { x: s0.x, z: s0.z, yaw: s0.yaw, vx: 0, vz: 0, speed: 0, walkPhase: 0, carry: null, idleT: 0, jt: -1, jumpBuf: 0, y: 0 };
+    this.jumpRec = { rook: { jt: -1, t: 0 }, doc: { jt: -1, t: 0 } };   // last snapshot jt per avatar (remote arcs are rebuilt from it)
 
     // ── camera ───────────────────────────────────────────────────────────
     this.camYawLocal = Math.PI;      // looking from the door toward the back wall
@@ -157,14 +159,18 @@ export class GarageView {
     const c = e.code;
     const MOVE = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight'];
     if (MOVE.includes(c)) { if (down) this.keys.add(c); else this.keys.delete(c); return true; }
-    if (c === 'KeyE' || c === 'Space' || c === 'Enter') {
+    if (c === 'Space') {
+      if (down && !e.repeat) this._jumpEdge = true;
+      return true;
+    }
+    if (c === 'KeyE' || c === 'Enter') {
       if (down && !e.repeat) this._edge = true;
       if (down) this.keys.add('ACT'); else this.keys.delete('ACT');
       return true;
     }
     return false;
   }
-  clearKeys() { this.keys.clear(); this._edge = false; }
+  clearKeys() { this.keys.clear(); this._edge = false; this._jumpEdge = false; }
 
   /** Camera-relative WASD → world-space move vector (unit length max). */
   moveVector() {
@@ -177,8 +183,8 @@ export class GarageView {
   /** Driver: DriverInput additions for ONE sim step (the interact edge is delivered once). */
   consumeInput() {
     const m = this.moveVector();
-    const out = { moveX: m.x, moveZ: m.z, run: this.keys.has('ShiftLeft') || this.keys.has('ShiftRight'), interact: this._edge, interactHeld: this.keys.has('ACT') };
-    this._edge = false;
+    const out = { moveX: m.x, moveZ: m.z, run: this.keys.has('ShiftLeft') || this.keys.has('ShiftRight'), interact: this._edge, interactHeld: this.keys.has('ACT'), jump: !!this._jumpEdge };
+    this._edge = false; this._jumpEdge = false;
     return out;
   }
 
@@ -197,6 +203,7 @@ export class GarageView {
       out.push(c); this._lastSent = { mx: m.x, mz: m.z, run };
     }
     if (this._edge) { this._edge = false; out.push({ type: CMD.AVATAR_ACT }); }
+    if (this._jumpEdge) { this._jumpEdge = false; this._predJump = true; out.push({ type: CMD.AVATAR_JUMP }); }
     this._predIn = { x: m.x, z: m.z, run };
     return out;
   }
@@ -206,6 +213,7 @@ export class GarageView {
     if (this.finished) return;
     dt = clamp(dt || 0, 0, 0.1);
     this.t += dt;
+    const fresh = !!snap && snap !== this.snap;
     if (snap) this.snap = snap;
     const S = this.snap;
     const G = S && S.garage;
@@ -219,6 +227,7 @@ export class GarageView {
       const L = this.frame.toLocal(a.x, a.z);
       const ly = this.frame.yawToLocal(a.yaw);
       this.smooth[who].push(L.x, L.z, ly, now);
+      if (fresh) this.jumpRec[who] = { jt: a.jt ?? -1, t: now };
     }
     this._items(dt, G);
     this._predict(dt, G);
@@ -226,9 +235,12 @@ export class GarageView {
       const a = G[who]; if (!a) continue;
       const av = this.av[who];
       let p = this.smooth[who].update(dt, now, this.role === 'driver' ? 30 : 14);
-      if (who === this.me && this.role === 'cook' && !a.inRv) p = this.pred;
+      const own = who === this.me && this.role === 'cook' && !a.inRv;
+      if (own) p = this.pred;
+      const jr = this.jumpRec[who];
+      const y = own ? this.pred.y : jr.jt >= 0 ? jumpY(jr.jt + (now - jr.t)) : 0;
       const carry = a.carry === 'crate' ? 'crate' : who === 'rook' && this._keysShowT > 0 ? 'keys' : who === 'doc' && G.items.notebook === 'doc' && !a.inRv ? 'notebook' : null;
-      av.set({ x: p.x, z: p.z, yaw: p.yaw, speed: who === this.me && this.role === 'cook' ? this.pred.speed : a.speed, carry, act: a.act || 0, run: a.speed > 3.3 });
+      av.set({ x: p.x, z: p.z, y, yaw: p.yaw, speed: who === this.me && this.role === 'cook' ? this.pred.speed : a.speed, carry, act: a.act || 0, run: a.speed > 3.3 });
       // boarding: step into the door, then vanish
       if (a.inRv) {
         if (this.boardT[who] < 0) this.boardT[who] = 0;
@@ -251,7 +263,9 @@ export class GarageView {
     const me = G[this.me];
     const L = this.frame.toLocal(me.x, me.z);
     const P = this.pred;
-    if (me.inRv) { P.x = L.x; P.z = L.z; P.speed = 0; return; }
+    if (me.inRv) { P.x = L.x; P.z = L.z; P.speed = 0; resetJump(P); this._predJump = false; return; }
+    if (this._predJump) { this._predJump = false; tryJump(P); }
+    stepJump(P, dt);
     const m = this._predIn || this.moveVector();
     const d = this.frame.dirToLocal(m.x, m.z);
     P.carry = me.carry;
@@ -357,7 +371,7 @@ export class GarageView {
     const me = this.me, other = this.other;
     const task = G.task ? G.task[me] : null;
     const near = !!(G.near && G.near[me]);
-    const sub = task === 'markers' ? '[W][A][S][D] walk · [Shift] run · drag the mouse to look' : task === 'crank' && me === 'rook' && G.items.engine !== 'on' ? 'keep it held until she catches' : task === 'carry' ? 'carrying is slow — no running' : '';
+    const sub = task === 'markers' ? '[W][A][S][D] walk · [Shift] run · [Space] jump · drag the mouse to look' : task === 'crank' && me === 'rook' && G.items.engine !== 'on' ? 'keep it held until she catches' : task === 'carry' ? 'carrying is slow — no running' : '';
     this.hud.instruction(G.prompt ? G.prompt[me] : '', { near, who: me === 'rook' ? 'ROOK · you' : 'DOC · you', sub });
     const otask = G.task ? G.task[other] : null;
     const oname = other === 'rook' ? 'Rook' : 'Doc';

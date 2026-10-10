@@ -41,7 +41,7 @@ export class VanHud {
         <div class="vh-m vh-m-ext"><span>EXTING.</span><em></em></div>
         <div class="vh-flags"><span class="vh-f-vent">VENT SHUT</span><span class="vh-f-curt">CURTAINS OPEN</span></div>
       </div>
-      <div class="vh-legend"><kbd>WASD</kbd> walk <i>·</i> <kbd>E</kbd> use <i>·</i> <kbd>Q</kbd>/<kbd>Esc</kbd> step away <i>·</i> <kbd>wheel</kbd> zoom <i>·</i> click floor to walk</div>
+      <div class="vh-legend"><kbd>WASD</kbd> walk <i>·</i> <kbd>Space</kbd> jump <i>·</i> <kbd>E</kbd> use <i>·</i> <kbd>Q</kbd>/<kbd>Esc</kbd> step away <i>·</i> <kbd>wheel</kbd> zoom <i>·</i> click floor to walk</div>
       <div class="vh-pantry vh-card" hidden></div>
       <div class="vh-board" hidden><div class="vh-board-in vh-card"></div></div>
       <div class="vh-result vh-card" hidden></div>

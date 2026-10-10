@@ -2,7 +2,7 @@
 // ShopBase — shared machinery for the driver's shop challenges (Agent ONFOOT). Local only.
 // Owns its own THREE.Scene + camera + lights, drawn through view.setSceneOverride; Rook on foot in
 // third person (createModel('driver') + walk cycle); WASD/arrows camera-relative, Shift run,
-// E / Space / left click = interact, Esc = abort; goal line + timer + prompts + result card.
+// E / Enter / left click = interact, Space = jump (interact while Rook is hidden in a machine), Esc = abort; goal line + timer + prompts + result card.
 // Subclasses implement: build(), step(h), timeUp() → {score, lines}, bot(h) (scripted test player).
 // Unity: a ShopChallenge base MonoBehaviour in its own additive scene; subclasses per type.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -11,10 +11,12 @@ import { createModel } from '../../assets/index.js';
 import { Avatar } from '../avatar.js';
 import { OnfootHud, el, keycaps, resultCard } from '../hud.js';
 import { World2D, walk, clamp, wrap } from './world2d.js';
+import { JUMP, tryJump, stepJump, resetJump } from '../../shared/jump.js';
 
 const _p = new THREE.Vector3();
 const MOVE_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight'];
-const ACT_KEYS = ['KeyE', 'Space', 'Enter'];
+const ACT_KEYS = ['KeyE', 'Enter'];
+const JUMP_KEYS = ['Space'];
 
 export class ShopBase {
   constructor(view, stopDef, data, opts = {}) {
@@ -39,7 +41,7 @@ export class ShopBase {
     this.camera = new THREE.PerspectiveCamera(52, 16 / 9, 0.1, 500);
     this.cam = { yaw: Math.PI, dist: 7.5, h: 6.0, look: 1.0, fov: 52, x: 0, z: 0, pos: null, at: null, lag: 5 };
     this.world = new World2D({ x0: -10, x1: 10, z0: -7, z1: 7 });
-    this.rook = { x: 0, z: 0, yaw: 0, vx: 0, vz: 0, speed: 0, act: 0, carry: null, frozen: false };
+    this.rook = { x: 0, z: 0, yaw: 0, vx: 0, vz: 0, speed: 0, act: 0, carry: null, frozen: false, jt: -1, jumpBuf: 0, y: 0 };
     this.rookAv = new Avatar(createModel('driver'), { name: 'rook' });
     this.scene.add(this.rookAv.root);
     this.walkSpeed = 2.6; this.runSpeed = 4.2;
@@ -67,7 +69,10 @@ export class ShopBase {
   timeUp() { return { score: 0.1, lines: ['Out of time'] }; }
   bot() { return null; }
   visual() {}
-  get handledKeys() { return MOVE_KEYS.concat(ACT_KEYS, this.extraKeys); }
+  get handledKeys() { return MOVE_KEYS.concat(ACT_KEYS, JUMP_KEYS, this.extraKeys); }
+  /** Space acts as interact (not jump) while this is true: Rook is hidden in a machine. Subclasses extend it. */
+  get spaceActs() { return !this.rookAv.visible; }
+  canJump() { const R = this.rook; return this.phase === 'play' && !R.frozen && !this.spaceActs && R.carry !== 'push' && R.carry !== 'wheel'; }
 
   // ── public API (via ShopChallenge) ───────────────────────────────────────
   onKey(e, down) {
@@ -101,8 +106,8 @@ export class ShopBase {
   // ── input helpers ─────────────────────────────────────────────────────────
   held(code) { return this.keys.has(code) || this.vkeys.has(code); }
   pressed(code) { return this.edges.has(code); }
-  get actPressed() { return ACT_KEYS.some((c) => this.edges.has(c)) || this.edges.has('MOUSE'); }
-  get actHeld() { return ACT_KEYS.some((c) => this.held(c)) || this.mouse.down || this.vkeys.has('MOUSE'); }
+  get actPressed() { return ACT_KEYS.some((c) => this.edges.has(c)) || this.edges.has('MOUSE') || (this.spaceActs && this.edges.has('Space')); }
+  get actHeld() { return ACT_KEYS.some((c) => this.held(c)) || this.mouse.down || this.vkeys.has('MOUSE') || (this.spaceActs && this.held('Space')); }
   get running() { return this.held('ShiftLeft') || this.held('ShiftRight'); }
   /** WASD relative to the camera → world vector. */
   moveInput(yaw = this.cam.yaw) {
@@ -120,7 +125,7 @@ export class ShopBase {
     if (R.frozen) { R.vx = R.vz = R.speed = 0; return null; }
     const m = this.moveInput();
     const max = (canRun && this.running ? this.runSpeed : this.walkSpeed) * speedMul;
-    return walk(R, m.x, m.z, max, h, this.world, 0.3);
+    return walk(R, m.x, m.z, max, h, this.world, 0.3, { accel: R.jt >= 0 ? 16 * JUMP.airControl : 16 });
   }
   near(p, r = 1.15) { return Math.hypot(this.rook.x - p.x, this.rook.z - p.z) <= r; }
 
@@ -132,11 +137,13 @@ export class ShopBase {
       if (this.introT >= 1.0) { this.phase = 'play'; }
     } else if (this.phase === 'play') {
       this.t += h;
+      if (JUMP_KEYS.some((c) => this.edges.has(c)) && this.canJump()) tryJump(this.rook);
       this.step(h);
+      if (this.canJump() || this.rook.jt >= 0) stepJump(this.rook, h, this.canJump()); else resetJump(this.rook);
       if (this.phase === 'play' && this.timeLeft <= 0) { const r = this.timeUp(); this.finish(r.score, ['⏱ Out of time', ...(r.lines || [])], 'TIME!'); }
     } else if (this.phase === 'result') {
       this.resultT += h;
-      if (this.resultT > 0.6 && this.actPressed) this._continue();
+      if (this.resultT > 0.6 && (this.actPressed || this.edges.has('Space'))) this._continue();
       else if (this.resultT >= 3.4) this._continue();
     }
     this.edges.clear();
@@ -162,7 +169,7 @@ export class ShopBase {
 
   _visual(dt) {
     const R = this.rook;
-    this.rookAv.set({ x: R.x, z: R.z, yaw: R.yaw, speed: R.speed, carry: R.carry, act: R.act, run: R.speed > 3.3 });
+    this.rookAv.set({ x: R.x, z: R.z, y: R.y || 0, yaw: R.yaw, speed: R.speed, carry: R.carry, act: R.act, run: R.speed > 3.3 });
     this.rookAv.update(dt);
     this.visual(dt);
     // timer
@@ -174,7 +181,7 @@ export class ShopBase {
     this.timerEl.classList.toggle('low', left < 10 && this.phase === 'play');
     // prompt
     if (this.phase === 'play' && this.prompt) this.hud.instruction(this.prompt.text, { near: !!this.prompt.near, who: this.prompt.who || 'ROOK', sub: this.prompt.sub || '' });
-    else if (this.phase === 'intro') this.hud.instruction(this.shop.goal || '', { who: 'GET READY', sub: '[W][A][S][D] move · [Shift] run · [E] interact' });
+    else if (this.phase === 'intro') this.hud.instruction(this.shop.goal || '', { who: 'GET READY', sub: '[W][A][S][D] move · [Shift] run · [Space] jump · [E] interact' });
     this._camera(dt);
   }
 

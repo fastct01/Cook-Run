@@ -584,13 +584,15 @@ class Lobby {
               <ul class="crl-cook-list">
                 <li>You drive from the cab. Watch for the <b>STOP AT</b> banner and the arrow, then pull into the lot and stop.</li>
                 <li>At each store Rook runs in for a quick challenge: the better you do, the more supplies you load. <kbd>Esc</kbd> gives up.</li>
+                <li>On foot (garage, shops): <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk · <kbd>Shift</kbd> run · <kbd>E</kbd> use · <kbd class="crl-kbd-wide">Space</kbd> jump.</li>
               </ul>
             </section>
             <section class="crl-howto-col crl-howto-col--cook">
               <h3>${ROLE_INFO.cook.icon}Cook <small>in the van</small></h3>
               <dl class="crl-keys">
                 <dt><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dt><dd>Walk Doc around the lab</dd>
-                <dt><kbd>E</kbd> / <kbd class="crl-kbd-wide">Space</kbd></dt><dd>Use a station</dd>
+                <dt><kbd>E</kbd></dt><dd>Use a station</dd>
+                <dt><kbd class="crl-kbd-wide">Space</kbd></dt><dd>Jump</dd>
                 <dt><kbd>Q</kbd> / <kbd>Esc</kbd></dt><dd>Step away</dd>
                 <dt>Click · drag</dt><dd>Walk there · cook on the props</dd>
                 <dt><kbd>R</kbd></dt><dd>At a stop: climb onto the roof</dd>
