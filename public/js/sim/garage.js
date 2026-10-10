@@ -49,7 +49,12 @@ export const LAYOUT = Object.freeze({
     [-9.0, -8.1, -3.5, -1.8],      // desk
     [-9.0, -8.2, -1.15, -0.35],    // fridge
     [-9.0, -8.0, 1.05, 3.45],      // sofa
-    [-6.2, -2.2, 1.3, 5.9],        // two-post lift with the project car
+    // two-post lift: the car body (underside 1.47 m, Doc is 1.81 m) + each post with its arms (1.48 m).
+    // The bay beside the car's ends is open floor below 1.4 m, so it is not walled off.
+    [-5.1, -3.3, 1.3, 5.9],        // project car on the lift
+    [-6.45, -5.1, 2.7, 4.5],       // lift post (x -5.9) + arms + control box
+    [-3.3, -2.2, 2.7, 4.5],        // lift post (x -2.5) + arms
+    [-2.2, -1.75, 1.95, 5.25],     // leaning tyres on the lift-bay line (one flat face: no notch to snag on)
     [8.2, 9.0, 2.1, 5.7],          // shelving rack + compressor
     [2.65, 5.35, -4.55, 4.15],     // the parked RV (8.6 × 2.6 + mirrors)
   ],
@@ -57,7 +62,6 @@ export const LAYOUT = Object.freeze({
     [-7.6, -2.6, 0.32],            // desk chair
     [-7.15, 2.25, 0.55],           // cable-spool table
     [-1.4, 5.9, 0.38],             // tyre stack
-    [-1.95, 2.3, 0.35], [-1.95, 4.9, 0.35],   // leaning tyres
     [8.3, -6.3, 0.32], [7.6, -6.4, 0.32], [8.35, -5.6, 0.32], [7.3, -5.3, 0.5],   // oil drums
     [-0.4, 6.5, 0.3],              // trash barrel
   ],

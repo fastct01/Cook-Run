@@ -203,7 +203,9 @@ class Session {
     if (this.demo) this.hud.toast('Demo — bots are playing. Press any driving key to take the wheel.', 'info');
 
     this._last = performance.now();
+    this._rafAt = this._last;
     this._raf = requestAnimationFrame((t) => this.frame(t));
+    if (this.isHost && this.net) this._startBgTicker();
   }
 
   // ── lab (CookLab + CookUI) ────────────────────────────────────────────────
@@ -380,13 +382,34 @@ class Session {
     if (this.destroyed) return;
     this._raf = requestAnimationFrame((t) => this.frame(t));
     const dt = Math.min(0.1, Math.max(0, (now - this._last) / 1000));
-    this._last = now;
+    this._last = now; this._rafAt = now;
     try {
       if (this.isHost) this.hostFrame(dt); else this.cookFrame(dt);
     } catch (e) {
       console.error(e);
       if (!this._errShown) { this._errShown = true; this.hud.toast('Something went wrong — see the console', 'bad'); }
     }
+  }
+
+  // requestAnimationFrame stops in a hidden / minimised / covered tab. For an online host that froze the
+  // whole game (sim, snapshots), so the cook's Doc walked into "invisible walls" while his prediction got
+  // pulled back to the frozen position. A worker's timer keeps firing in the background (page timers get
+  // throttled to 1 Hz); it only steps the host while the tab is hidden or rAF has stopped, and skips rendering.
+  _startBgTicker() {
+    let w;
+    try {
+      const url = URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 50);'], { type: 'text/javascript' }));
+      w = new Worker(url); URL.revokeObjectURL(url);
+    } catch (e) { console.warn('[host] background ticker unavailable', e); return; }
+    w.onmessage = () => {
+      if (this.destroyed) return;
+      const now = performance.now();
+      if (!document.hidden && now - this._rafAt < 1000) return;   // visible and rAF alive: rAF drives the host
+      const dt = Math.min(0.1, Math.max(0, (now - this._last) / 1000));
+      this._last = now;
+      try { this.hostFrame(dt, false); } catch (e) { console.error(e); }
+    };
+    this._offs.push(() => w.terminate());
   }
 
   driverInput() {
@@ -406,7 +429,7 @@ class Session {
     return this.input.consume();
   }
 
-  hostFrame(dt) {
+  hostFrame(dt, render = true) {
     const sim = this.sim;
     if (!this.paused) {
       this.acc += dt;
@@ -450,7 +473,7 @@ class Session {
 
     this.fp?.update(this.paused ? 0 : dt, snap, this._lastInput);
     this.hud.setLookCooldown?.(this.fp?.active ? this.fp.cooldown : null);
-    this.view.render(this.paused ? 0 : dt);
+    if (render) this.view.render(this.paused ? 0 : dt);
 
     if (!this.ended && (sim.phase === 'won' || sim.phase === 'lost')) {
       this.ended = true;

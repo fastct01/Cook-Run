@@ -214,6 +214,7 @@ export class GarageView {
     dt = clamp(dt || 0, 0, 0.1);
     this.t += dt;
     const fresh = !!snap && snap !== this.snap;
+    this._snapAge = fresh ? 0 : (this._snapAge || 0) + dt;
     if (snap) this.snap = snap;
     const S = this.snap;
     const G = S && S.garage;
@@ -264,6 +265,8 @@ export class GarageView {
     const L = this.frame.toLocal(me.x, me.z);
     const P = this.pred;
     if (me.inRv) { P.x = L.x; P.z = L.z; P.speed = 0; resetJump(P); this._predJump = false; return; }
+    // host stalled (no snapshots): don't let the prediction run ahead into a phantom wall
+    if (this.role === 'cook' && this._snapAge > 0.5) { P.vx = P.vz = P.speed = 0; stepJump(P, dt); return; }
     if (this._predJump) { this._predJump = false; tryJump(P); }
     stepJump(P, dt);
     const m = this._predIn || this.moveVector();
