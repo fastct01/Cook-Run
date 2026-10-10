@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>R3 UI — model cut-out (capture helper)</title>
+<link rel="icon" href="data:,">
+<style>html,body{margin:0;background:transparent;overflow:hidden}canvas{display:block}</style>
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+</head>
+<body>
+<script type="module">
+// Capture helper for the Round 3 UI mockups (agent R3-UI): one of OUR models on a transparent background.
+//   r3-ui-model.html?kind=cop&w=600&h=400&cam=4,3,5&at=0,0.8,0&fov=30[&ortho=3.2][&pose=seated|wave][&variant=0]
+// window.__ready = true when drawn.
+import * as THREE from 'three';
+import { createModel, preloadAssets } from './js/assets/index.js';
+
+const q = new URLSearchParams(location.search);
+const kind = q.get('kind') || 'cop';
+const W = +(q.get('w') || 600), H = +(q.get('h') || 400);
+const v3 = (s, d) => new THREE.Vector3(...(s || d).split(',').map(Number));
+try { await preloadAssets?.({ kinds: [kind] }); } catch (e) { /* optional */ }
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W, H);
+renderer.setClearColor(0x000000, 0);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const m = createModel(kind, +(q.get('variant') || 0));
+m.rotation.y = +(q.get('yaw') || 0);
+scene.add(m);
+const pose = q.get('pose');
+const get = (n) => m.getObjectByName(n);
+if (pose === 'wave') { const a = get('arm_r'); if (a) { a.rotation.x = -2.6; a.rotation.z = 0.3; } }
+if (pose === 'arms') { const a = get('arm_r'), b = get('arm_l'); if (a) a.rotation.x = -1.1; if (b) b.rotation.x = -1.1; }
+for (const n of ['light_red', 'light_blue']) { const o = get(n); if (o) o.traverse((c) => { if (c.material) { c.material = c.material.clone(); c.material.emissive && c.material.emissive.set(n === 'light_red' ? '#ff3a22' : '#2f6fff'); } }); }
+m.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+
+scene.add(new THREE.HemisphereLight('#fff4e0', '#8a5a3a', 1.5));
+const sun = new THREE.DirectionalLight('#fff1dc', 2.0);
+sun.position.set(3, 8, 5); scene.add(sun);
+
+const at = v3(q.get('at'), '0,0.8,0');
+let cam;
+if (q.has('ortho')) {
+  const h = +q.get('ortho'), w = h * W / H;
+  cam = new THREE.OrthographicCamera(-w / 2, w / 2, h / 2, -h / 2, 0.1, 200);
+} else cam = new THREE.PerspectiveCamera(+(q.get('fov') || 30), W / H, 0.05, 200);
+cam.position.copy(v3(q.get('cam'), '4,3,5'));
+cam.lookAt(at);
+renderer.render(scene, cam);
+requestAnimationFrame(() => { renderer.render(scene, cam); window.__ready = true; });
+</script>
+</body>
+</html>

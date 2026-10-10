@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cook &amp; Run — R3 cab preview</title>
+<link rel="icon" href="data:,">
+<style>
+  html, body { margin: 0; height: 100%; background: #22262a; overflow: hidden; }
+  #view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  #cap { position: fixed; left: 10px; top: 10px; z-index: 5; font: 600 13px/1.35 system-ui, sans-serif; color: #f1ead8;
+         background: rgba(20, 22, 24, .62); padding: 6px 9px; border-radius: 6px; pointer-events: none; white-space: pre; }
+  body.shot #cap { display: none; }
+</style>
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="cap"></div>
+<script type="module">
+// ─────────────────────────────────────────────────────────────────────────────
+// r3-cab-preview.html — agent R3-CAB's proof page for the PROPOSED cab `rv_cab_fp_r3` (not wired into the game).
+// Runs the real WorldView (world, sky, lighting) with a parked RV, hangs the cab under view.rvAnchor exactly
+// like FirstPersonDriver does (rvOffset, layer 1 hidden, no cab shadows), live mirrors via render/fp/mirrors.js,
+// and places the camera at the driver's eye with FirstPersonDriver's tuned pitch (−0.16) and FOV (76°).
+//   ?kind=rv_cab_fp_r3|rv_cab_fp   ?v=0|1 (gloves | bare)          ?cam=eye|hands|hands2|dash|wide|side
+//   ?wheel=<deg, + = right>        ?follow=<hand counter-rotation factor, default −0.5 as FirstPersonDriver>
+//   ?grip=slide&ride=0.45 (proposed hand recipe: hands ride ±ride rad, then the rim slides through them)
+//   ?hands=0 (hide the hands for detail shots)
+//   ?gear=P|R|N|D|L  ?mph=  ?rpm=  ?temp=0..1  ?lamps=1  ?signal=L|R  ?wipers=<rad>  ?horn=1  ?key=off|run|start
+//   ?cam=custom&cpos=x,y,z&cat=x,y,z (RV-local camera + target)
+//   ?z=<route m> ?tod=<hour> ?fov= ?pitch= ?yaw=<head yaw rad, + = left> ?world=0 (plain backdrop) ?mirrors=0 ?shot=1
+// window.__cab = { done, ready, cab, view, frame(n), stats() }
+// ─────────────────────────────────────────────────────────────────────────────
+import * as THREE from 'three';
+import { createModel, cloneInstanceMaterials, statsOf } from './js/assets/index.js';
+
+const q = new URLSearchParams(location.search);
+const num = (k, d) => (q.has(k) && q.get(k) !== '' ? +q.get(k) : d);
+if (q.has('shot')) document.body.classList.add('shot');
+const KIND = q.get('kind') || 'rv_cab_fp_r3';
+const VAR = num('v', 0);
+const CAM = q.get('cam') || 'eye';
+const WHEEL = THREE.MathUtils.degToRad(num('wheel', 0));
+const FOLLOW = num('follow', -0.5);
+const RV_LAYER = 1;
+const canvas = document.getElementById('view');
+const api = window.__cab = { done: false, error: null };
+
+// camera presets in RV-local coords (eye = FirstPersonDriver)
+const PRESETS = {
+  hands: { pos: [0.99, 1.86, 2.66], at: [0.7, 1.585, 2.95], fov: 44 },
+  hands2: { pos: [0.18, 1.9, 2.5], at: [0.6, 1.57, 2.93], fov: 52 },
+  dash: { pos: [-0.3, 1.66, 2.36], at: [0.3, 1.27, 3.0], fov: 60 },
+  wide: { pos: [0.42, 2.06, 2.12], at: [0.5, 1.5, 3.2], fov: 78 },
+  side: { pos: [1.0, 1.72, 2.95], at: [0.52, 1.56, 2.95], fov: 50 },
+};
+
+function buildCab() {
+  const cab = createModel(KIND, VAR);
+  cab.position.set(...(cab.userData.rvOffset || [0, 0, 2.8]));
+  cab.name = 'fp_cab';
+  cab.traverse((o) => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
+  const lampsLit = q.get('lamps') === '1';
+  if (lampsLit) {
+    const mats = cloneInstanceMaterials(cab);
+    for (const n of ['lamp_check', 'lamp_oil', 'lamp_heat']) if (mats[n]) mats[n].emissiveIntensity = 1.4;
+  }
+  const g = (n) => cab.getObjectByName(n);
+  if (q.get('hands') === '0') for (const n of ['hand_l', 'hand_r']) { const h = g(n); if (h) h.visible = false; }
+  const GA = cab.userData.gauges || {};
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const set = (n, v) => { const o = g(n); if (o) o.rotation.z = v; };
+  set('needle_speed', lerp(2.36, -2.36, Math.min(1.05, num('mph', 0) / 100)));
+  set('needle_rpm', lerp(2.1, -2.1, Math.min(1.02, num('rpm', 780) / 6000)));
+  set('needle_temp', lerp(0.85, -0.85, num('temp', 0.5)));
+  set('wheel', WHEEL);
+  if (q.get('grip') === 'slide') {            // proposed recipe: hands ride ±0.9 rad, then the rim slides through them
+    const R = cab.userData.wheel.radius, gA = cab.userData.wheel.grip;
+    const RIDE = num('ride', 0.45), ride = Math.max(-RIDE, Math.min(RIDE, WHEEL)), slip = WHEEL - ride;
+    for (const [n, a] of [['hand_l', gA + slip], ['hand_r', -gA + slip]]) { const h = g(n); if (h) { h.position.set(R * Math.sin(a), R * Math.cos(a), 0); h.rotation.z = -slip; } }
+  } else { set('hand_l', FOLLOW * WHEEL); set('hand_r', FOLLOW * WHEEL); }
+  set('wiper_l', num('wipers', 0)); set('wiper_r', num('wipers', 0));
+  const ctl = cab.userData.controls;
+  if (ctl) {
+    const gear = (q.get('gear') || 'D').toUpperCase();
+    if (ctl.gear_pointer[gear] != null) set('gear_pointer', ctl.gear_pointer[gear]);
+    if (q.get('signal')) set('stalk_signal', q.get('signal').toUpperCase() === 'R' ? ctl.stalk_signal.right : ctl.stalk_signal.left);
+    if (num('wipers', 0) > 0) set('stalk_wiper', ctl.stalk_wiper.on);
+    if (q.get('key')) set('key', ctl.key[q.get('key')] ?? ctl.key.run);
+    if (q.get('horn') === '1') { const h = g('horn_pad'); if (h) h.position.z = ctl.horn_pad.pressed; }
+  }
+  return cab;
+}
+
+function placeCamera(camera, frame, ud) {
+  frame.updateWorldMatrix(true, false);
+  const qf = new THREE.Quaternion(); frame.getWorldQuaternion(qf);
+  let posL, qL, fov;
+  if (CAM === 'eye') {
+    posL = new THREE.Vector3(...ud.eye);
+    qL = new THREE.Quaternion().setFromEuler(new THREE.Euler(num('pitch', -0.16), Math.PI + num('yaw', 0), 0, 'YXZ'));
+    // FirstPersonDriver._baseFov: 76° (VIEW_FOV), widened on narrow screens to keep ~90° across
+    const a = camera.aspect || 16 / 9, need = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(Math.PI / 4) / a));
+    fov = Math.min(104, Math.max(num('fov', 76), need));
+  } else {
+    const P = q.get('cpos') ? { pos: q.get('cpos').split(',').map(Number), at: (q.get('cat') || '0.55,1.56,2.9').split(',').map(Number), fov: 40 } : (PRESETS[CAM] || PRESETS.hands);
+    posL = new THREE.Vector3(...P.pos);
+    const m = new THREE.Matrix4().lookAt(posL, new THREE.Vector3(...P.at), new THREE.Vector3(0, 1, 0));
+    qL = new THREE.Quaternion().setFromRotationMatrix(m);
+    fov = num('fov', P.fov);
+  }
+  camera.position.copy(posL.applyMatrix4(frame.matrixWorld));
+  camera.quaternion.copy(qf).multiply(qL);
+  camera.up.set(0, 1, 0);
+  camera.near = 0.03; camera.fov = fov; camera.updateProjectionMatrix();
+  camera.layers.disable(RV_LAYER);
+}
+
+function caption(cab) {
+  const st = statsOf(cab);
+  const ud = cab.userData;
+  document.getElementById('cap').textContent = `${KIND} v${VAR}${KIND === 'rv_cab_fp_r3' ? (VAR ? ' · bare hands' : ' · nitrile gloves') : ''} · cam ${CAM}` +
+    `${CAM === 'eye' ? ` (eye ${ud.eye.join(', ')}, pitch −0.16, fov 76°)` : ''}\n${st.tris} tris · ${st.meshes} meshes · wheel ${num('wheel', 0)}°`;
+}
+
+async function runWorld() {
+  const [{ loadData }, { WorldView }, { Track }, { Mirrors }] = await Promise.all([
+    import('./js/data/loadData.js'), import('./js/render/WorldView.js'), import('./js/sim/track.js'), import('./js/render/fp/mirrors.js')]);
+  const data = await loadData();
+  const seed = data.route.defaultSeed;
+  const track = new Track(data.route, seed);
+  const view = new WorldView(canvas, data, { seed, role: 'driver' });
+  const z = num('z', 21000);
+  const n = track.lanesAt(z), u = track.laneU(z, Math.min(n - 1, Math.floor(n / 2)));
+  const snap = {
+    t: 0, phase: 'drive', countdown: 0, timeOfDay: num('tod', 10.5),
+    rv: { x: track.xAt(z, u), y: track.surfaceY(z) ?? 0, z, yaw: track.headingAt(z), pitch: 0, roll: 0, speed: 0, steer: 0, hp: 100, airborne: false, nitro: 0, onRoad: true },
+    crew: { driver: 100, cook: 100 }, heat: { value: 0, stars: 0 }, bust: 0, score: { points: 0, chaos: 0 }, inv: { units: 0, quality: 0, gadgets: {} },
+    feel: { latAcc: 0, bump: 0 }, alert: {}, lab: {}, ents: [], events: [], dist: z, routeLength: data.route.routeLength, looted: [],
+  };
+  await view.ready;
+  const cab = buildCab();
+  view.rvAnchor.add(cab);
+  const frame = cab.getObjectByName('rv_frame') || cab;
+  const mirrors = q.get('mirrors') === '0' ? null : new Mirrors(cab, { rvLength: view.rv?.size?.l || 8.6, rvHeight: view.rv?.size?.h || 3.4, hz: 30 });
+  if (mirrors) view.addPreRender((renderer, scene, camera) => mirrors.render(renderer, scene, camera, 0.1));
+  view.setCameraController({ name: 'r3cab', update: (dt, camera) => placeCamera(camera, frame, cab.userData) });
+  caption(cab);
+  const frameN = (k = 1) => { for (let i = 0; i < k; i++) { view.pushSnapshot(snap); view.render(1 / 30); } };
+  Object.assign(api, { cab, view, frame: frameN, stats: () => ({ ...view.stats, cab: statsOf(cab) }) });
+  frameN(2);
+  for (let i = 0; i < 40 && !view.isSettled(); i++) { frameN(1); await new Promise((r) => setTimeout(r, 30)); }
+  frameN(8);                                  // let every visible mirror get a pass
+  api.done = true;
+}
+
+async function runPlain() {
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(1); renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
+  renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.08;
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color('#bcd6e4'); scene.fog = new THREE.Fog('#c9dbe2', 60, 420);
+  scene.add(new THREE.HemisphereLight('#dfe9f0', '#8a7a62', 1.25));
+  const sun = new THREE.DirectionalLight('#fff3dc', 2.4); sun.position.set(30, 60, 20); scene.add(sun);
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(2000, 2000), new THREE.MeshLambertMaterial({ color: '#d4b07a' }));
+  ground.rotation.x = -Math.PI / 2; scene.add(ground);
+  const road = new THREE.Mesh(new THREE.PlaneGeometry(9, 2000), new THREE.MeshLambertMaterial({ color: '#46474b' }));
+  road.rotation.x = -Math.PI / 2; road.position.set(1.6, 0.01, 0); scene.add(road);
+  for (let zz = -40; zz < 600; zz += 12) { const d = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 4), new THREE.MeshBasicMaterial({ color: '#e0c050' })); d.rotation.x = -Math.PI / 2; d.position.set(1.6, 0.02, zz); scene.add(d); }
+  for (const [kind, x, zz] of [['mesa', -60, 260], ['cactus', -9, 40], ['cactus', 12, 70], ['powerpole', -7, 30], ['powerpole', -7, 90], ['sedan', 3.5, 38], ['rock_big', 25, 120]]) {
+    const o = createModel(kind, 0); o.position.set(x, 0, zz); o.rotation.y = kind === 'sedan' ? 0 : 0.6; scene.add(o);
+  }
+  const rv = new THREE.Group(); scene.add(rv);
+  const cab = buildCab(); rv.add(cab);
+  const frame = cab.getObjectByName('rv_frame') || cab;
+  const camera = new THREE.PerspectiveCamera(76, canvas.clientWidth / canvas.clientHeight, 0.03, 2000);
+  caption(cab);
+  const frameN = (k = 1) => { for (let i = 0; i < k; i++) { placeCamera(camera, frame, cab.userData); renderer.render(scene, camera); } };
+  Object.assign(api, { cab, frame: frameN, stats: () => ({ calls: renderer.info.render.calls, cab: statsOf(cab) }) });
+  frameN(2);
+  api.done = true;
+}
+
+api.ready = (q.get('world') === '0' ? runPlain() : runWorld()).catch((e) => { console.error('[r3-cab-preview]', e); api.error = String(e && e.stack || e); api.done = true; });
+</script>
+</body>
+</html>
