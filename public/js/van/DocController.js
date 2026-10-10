@@ -270,7 +270,12 @@ export class DocController {
       dx = this.camR.x * this.moveX + this.camF.x * this.moveZ;
       dz = this.camR.z * this.moveX + this.camF.z * this.moveZ;
       const l = Math.hypot(dx, dz);
-      if (l > 1e-4) { want = Math.min(1, l) * this.walkSpeed; dx /= l; dz /= l; }
+      if (l > 1e-4) {
+        want = Math.min(1, l) * this.walkSpeed; dx /= l; dz /= l;
+        // the aisle is narrow and the camera sees it from the side, so most screen directions run into a
+        // counter: walk along it at full speed instead of crawling at the leftover component
+        if (!this.inside(this.x + dx * 0.1, this.z + dz * 0.1)) ({ x: dx, z: dz } = this._slideDir(dx, dz));
+      }
     } else if (this.path.length) {
       const w = this.path[0];
       const ddx = w.x - this.x, ddz = w.z - this.z, l = Math.hypot(ddx, ddz);
@@ -309,6 +314,15 @@ export class DocController {
     this.walkPhase += sp * dt * 5.2;
     if (this.state !== 'stumbling') this.state = sp > 0.25 || this.path.length ? 'walking' : 'idle';
     this._lean(dt, clamp(this.pushVx * 0.25, -0.1, 0.1));
+  }
+  /** Blocked move direction → the free axis it leans toward (unit), or unchanged in a corner. */
+  _slideDir(dx, dz) {
+    const P = 0.1, MIN = 0.2;   // probe distance (m) · smallest component that still slides
+    const canX = Math.abs(dx) >= MIN && this.inside(this.x + Math.sign(dx) * P, this.z);
+    const canZ = Math.abs(dz) >= MIN && this.inside(this.x, this.z + Math.sign(dz) * P);
+    if (canZ && (!canX || Math.abs(dz) >= Math.abs(dx))) return { x: 0, z: Math.sign(dz) };
+    if (canX) return { x: Math.sign(dx), z: 0 };
+    return { x: dx, z: dz };
   }
   _lean(dt, target) {
     this.leanV += ((target - this.lean) * 60 - this.leanV * 9) * dt;
