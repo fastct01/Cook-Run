@@ -1,0 +1,16 @@
+# Render Blueprint for Cook & Run.
+# Dashboard → New → Blueprint → pick this repo → Apply.
+# One free web service: Express serves public/ and the WebSocket room relay on /ws.
+services:
+  - type: web
+    name: cook-and-run
+    runtime: node
+    plan: free
+    region: frankfurt          # closest Render region to London; can't be changed after creation
+    buildCommand: npm install  # postinstall copies three.js into public/vendor
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit  # redeploy on every push (replaces the deprecated autoDeploy: true)
+    envVars:
+      - key: NODE_VERSION
+        value: "22"          # Node 20 is end-of-life (Apr 2026); 22 is LTS and what the tests run on

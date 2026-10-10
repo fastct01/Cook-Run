@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cook &amp; Run — first-person test</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/hud.css">
+<style>
+  html, body { margin: 0; height: 100%; background: #22262a; overflow: hidden; }
+  #stage { position: fixed; inset: 0; }
+  #view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #hudroot { position: absolute; inset: 0; pointer-events: none; }
+  #dbg { position: fixed; left: 50%; bottom: 0; transform: translateX(-50%); z-index: 20; display: flex; gap: 4px; flex-wrap: wrap; justify-content: center;
+         font: 600 11px/1 system-ui, sans-serif; color: #f1ead8; padding: 4px 6px; background: rgba(34,38,42,.6); border-radius: 6px 6px 0 0; }
+  #dbg a { color: #d9a83a; text-decoration: none; padding: 3px 5px; border-radius: 4px; background: rgba(0,0,0,.25); cursor: pointer; }
+  #dbg span { padding: 3px 4px; opacity: .8; font-variant-numeric: tabular-nums; }
+  body.shot #dbg { display: none; }
+  body.cook #view, body.cook #hudroot { height: 58%; bottom: auto; }
+  body.cook #stage::after { content: 'COOK PANEL'; position: absolute; left: 0; right: 0; bottom: 0; height: 42%; display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(180deg, #3b3631, #2a2622); border-top: 3px solid #4f8f8a; color: rgba(241,234,216,.4); font: 700 18px system-ui; letter-spacing: .1em; }
+</style>
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+</head>
+<body>
+<div id="stage">
+  <canvas id="view"></canvas>
+  <div id="hudroot"></div>
+</div>
+<div id="dbg"></div>
+<script type="module">
+// ─────────────────────────────────────────────────────────────────────────────
+// fp-test.html — WorldView + FirstPersonDriver + Hud + audio on a real GameSim driven by the
+// Autopilot (falls back to a scripted drive if the sim can't start).
+//   ?z=<metres>      start position (default 3600, downtown)       ?seed=N
+//   ?fx=fog|flash|shock|fogflash   windscreen effects (fog builds, flash/shock pulse every 6 s)
+//   ?look=1          start a look-around after 1.5 s               ?head=left|right|up
+//   ?cop=1           a chasing cop glued behind the RV (mirrors)   ?can=flash|foam   canister ahead
+//   ?banner=1        force a STOP AT banner for the next stop      ?caption=<setpiece kind>
+//   ?stop=parked|shopping|returning|loading|blocked   fake stop state    ?roof=1  Doc on the roof
+//   ?regen=1  ?tod=<hour>  ?end=win|lose  ?fake=1 (no sim)  ?speed=<m/s cap>  ?shot=1 (hide debug bar)
+//   ?nofp=1          plain chase camera (for comparison)          ?wipers=1  force the wipers on
+// Keys: C look-around · M mute · H horn · P pause · F fog toggle · X end screen
+// window.__fp = { fp, view, hud, audio, sim, advance(sec), settled(), stats(), setFx(), head(), look(), event() }
+// ─────────────────────────────────────────────────────────────────────────────
+import { loadData } from './js/data/loadData.js';
+import { WorldView } from './js/render/WorldView.js';
+import { createAudio } from './js/render/audio.js';
+import { Hud } from './js/ui/hud.js';
+import { FirstPersonDriver } from './js/render/fp/FirstPersonDriver.js';
+import { Track } from './js/sim/track.js';
+import { EV, KIND_ID } from './js/shared/protocol.js';
+
+const q = new URLSearchParams(location.search);
+if (q.has('shot')) document.body.classList.add('shot');
+const data = await loadData();
+const seed = q.has('seed') ? +q.get('seed') : data.route.defaultSeed;
+const startZ = q.has('z') ? +q.get('z') : 3600;
+const track = new Track(data.route, seed);
+const canvas = document.getElementById('view');
+const hudRoot = document.getElementById('hudroot');
+const role = q.get('role') === 'cook' ? 'cook' : 'driver';
+if (role === 'cook') document.body.classList.add('cook');
+const audio = createAudio({ route: data.route });
+const view = new WorldView(canvas, data, { seed, role, audio });
+const hud = new Hud(hudRoot, data, { role });
+const fp = new FirstPersonDriver(view, data, { hudRoot, audio });
+const useFp = !q.has('nofp') && role === 'driver';
+fp.ready.then(() => { if (q.has('fov')) fp.ud.fov = +q.get('fov'); if (q.has('pitch')) fp.ud.eyePitch = +q.get('pitch'); });
+fp.setActive(useFp);
+hud.setFirstPerson(useFp);
+if (q.has('wipers')) fp.forceWipers = true;
+
+// ── sim (real GameSim + Autopilot) with a scripted fallback ─────────────────
+let sim = null, ap = null, mode = 'sim', fake = null, lastInput = null, prevSnap = null, shopWait = 0;
+const speedCap = q.has('speed') ? +q.get('speed') : null;
+async function startSim() {
+  if (q.has('fake')) throw new Error('fake requested');
+  const [{ GameSim }, { Autopilot }, veh] = await Promise.all([import('./js/sim/GameSim.js'), import('./js/sim/autopilot.js'), import('./js/sim/vehicle.js')]);
+  sim = new GameSim(data, { seed, solo: true });
+  if (sim.ready && typeof sim.ready.then === 'function') await sim.ready;
+  if (q.has('garage')) { ap = new Autopilot(data, { seed }); return; }     // stay in the on-foot tutorial (FP must be off)
+  if (sim.phase === 'garage' && sim.applyDriverCommand) sim.applyDriverCommand({ type: 'skipTutorial' });
+  if (startZ > 60 && veh.placeRv && veh.forwardLaneU) {
+    veh.placeRv(sim, startZ, veh.forwardLaneU(sim.road, startZ));
+    if (sim.obstacles && sim.obstacles.update) sim.obstacles.update(0);
+  }
+  sim.phase = 'drive'; sim.countdown = 0;
+  if (sim.rv) { const s0 = Math.min(speedCap ?? 18, 18); sim.rv.vx = Math.sin(sim.rv.yaw) * s0; sim.rv.vz = Math.cos(sim.rv.yaw) * s0; sim.rv.speed = s0; }
+  ap = new Autopilot(data, { seed, maxSpeed: speedCap ?? Infinity, sim, onDriverCommand: (c) => sim.applyDriverCommand?.(c), autoShop: q.has('shopwait') ? +q.get('shopwait') : 2.5 });
+  for (const st of data.route.stops) if (!q.has('stopin')) ap.skipped?.add?.(st.id);
+}
+try { await startSim(); } catch (e) {
+  if (!q.has('fake')) console.info('[fp-test] sim unavailable, scripted drive:', e && e.message);
+  mode = 'fake';
+  fake = { z: startZ, speed: speedCap ?? 22, t: 0 };
+}
+
+const lerp = (a, b, t) => a + (b - a) * t;
+function todAt(z) {
+  const k = data.route.timeOfDay || [[0, 12]];
+  if (z <= k[0][0]) return k[0][1];
+  for (let i = 1; i < k.length; i++) if (z <= k[i][0]) return lerp(k[i - 1][1], k[i][1], (z - k[i - 1][0]) / (k[i][0] - k[i - 1][0]));
+  return k[k.length - 1][1];
+}
+function areaAt(z) { const b = data.route.biomes.find((b) => z >= b.from && z < b.to) || data.route.biomes[data.route.biomes.length - 1]; return { id: b.id, name: b.name }; }
+
+function fakeSnap(dt) {
+  fake.t += dt; fake.z += fake.speed * dt;
+  const z = fake.z, n = track.lanesAt(z), u = track.laneU(z, Math.min(n - 1, Math.floor(n / 2)));
+  const steer = Math.sin(fake.t * 0.7) * 0.15;
+  return { t: fake.t, phase: 'drive', countdown: 0, rv: { x: track.xAt(z, u), y: track.surfaceY(z) ?? 0, z, yaw: track.headingAt(z), pitch: 0, roll: 0, speed: fake.speed, steer, hp: 82, airborne: false, nitro: 0, onRoad: true },
+    crew: { driver: 100, cook: 96 }, heat: { value: 1.4, stars: 1 }, bust: 0, score: { points: 1200, chaos: 3 }, inv: { units: 2, quality: 0.8, gadgets: { smoke: 1, oil: 1, nitro: 1 } },
+    feel: { latAcc: steer * 6, bump: 0.05 }, alert: {}, lab: {}, ents: [], events: [], dist: z, routeLength: data.route.routeLength, looted: [] };
+}
+
+// ── scenario knobs ───────────────────────────────────────────────────────────
+const fxMode = q.get('fx') || '';
+let fogOn = /fog/.test(fxMode);
+const fxState = { fog: 0, flash: 0, shock: 0, t: 0 };
+let forced = { fx: null };
+let runT = 0, paused = false, pendingEvents = [];
+let simAcc = 0;
+const FIXED = 1 / 60;
+
+function augment(snap, dt) {
+  const rv = snap.rv;
+  if (typeof snap.timeOfDay !== 'number') snap.timeOfDay = q.has('tod') ? +q.get('tod') : todAt(rv.z);
+  else if (q.has('tod')) snap.timeOfDay = +q.get('tod');
+  if (!snap.area) snap.area = areaAt(rv.z);
+  // fx
+  fxState.t += dt;
+  const ph = fxState.t % 6;
+  const fog = fogOn ? 0.9 : 0;
+  const flash = /flash/.test(fxMode) ? (ph > 1 && ph < 1.15 ? 1 : Math.max(0, fxState.flash - dt * 0.55)) : 0;
+  const shock = /shock/.test(fxMode) ? (ph > 1 && ph < 2.2 ? 0.85 : 0) : 0;
+  fxState.flash = flash; fxState.shock = shock;
+  const base = snap.fx || {};
+  snap.fx = { fog: Math.max(base.fog || 0, fog), flash: Math.max(base.flash || 0, flash), shock: Math.max(base.shock || 0, shock) };
+  if (forced.fx) Object.assign(snap.fx, forced.fx);
+  // STOP AT banner: next un-looted stop within bannerDist
+  const bd = data.rules.stops?.bannerDist ?? 800;
+  if (!snap.nearStop || q.has('banner')) {
+    const looted = new Set(snap.looted || []);
+    const st = data.route.stops.find((s) => !looted.has(s.id) && s.z - rv.z > -s.lotLength / 2 && s.z - rv.z <= (q.has('banner') ? 1e9 : bd));
+    if (st) {
+      const d = st.z - rv.z;
+      snap.nearStop = { id: st.id, name: st.name, dist: q.has('banner') ? Math.min(d, 450) : d, side: st.side, z: st.z };
+    }
+  }
+  // fake stop states / roof / regen
+  const stopQ = q.get('stop');
+  if (stopQ) {
+    const st = data.route.stops[0];
+    snap.stop = { id: st.id, name: st.name, shopType: 'collect', state: stopQ === 'blocked' ? 'loading' : stopQ, progress: stopQ === 'loading' || stopQ === 'blocked' ? 0.45 : 0, blocked: stopQ === 'blocked', copDist: 18, roof: { active: q.has('roof') } };
+  }
+  if (q.has('roof')) rv.roofDoc = true;
+  if (q.has('regen')) rv.regen = true;
+  // a chasing cop glued 14 m behind (mirrors), canister ahead
+  const ents = snap.ents = (snap.ents || []).slice();
+  const fx_ = Math.sin(rv.yaw), fz_ = Math.cos(rv.yaw);
+  if (q.has('cop')) {
+    const back = 13 + Math.sin(runT * 0.8) * 2, side = q.get('cop') === 'left' ? 2.6 : q.get('cop') === 'right' ? -2.6 : 0.6;
+    ents.push([990001, KIND_ID.cop, rv.x - fx_ * back + fz_ * side, rv.y, rv.z - fz_ * back - fx_ * side, rv.yaw, 0, 1]);
+    ents.push([990002, KIND_ID.cop_suv, rv.x - fx_ * (back + 14) - fz_ * 2.8, rv.y, rv.z - fz_ * (back + 14) + fx_ * 2.8, rv.yaw, 0, 1]);
+  }
+  if (q.get('can')) {
+    const ahead = 22 - (runT % 4) * 2;
+    ents.push([990010, KIND_ID.flashbang, rv.x + fx_ * ahead + fz_ * 1.2, rv.y + 0.1, rv.z + fz_ * ahead - fx_ * 1.2, 0, q.get('can') === 'foam' ? 1 : 0, 1]);
+  }
+  if (pendingEvents.length) { snap.events = (snap.events || []).concat(pendingEvents); pendingEvents = []; }
+  return snap;
+}
+
+function step(dt) {
+  if (mode === 'sim') {
+    simAcc += dt;
+    const inp = prevSnap ? ap.update(prevSnap) : null;
+    lastInput = inp;
+    let n = 0;
+    while (simAcc >= FIXED && n < 30) { sim.step(inp, FIXED); simAcc -= FIXED; n++; }
+    prevSnap = sim.snapshot();
+    // (the Autopilot's autoShop stands in for ONFOOT's ShopChallenge: shopDone after ?shopwait s)
+    return prevSnap;
+  }
+  return fakeSnap(dt);
+}
+
+let snap = null;
+function frame(dt, draw = true) {
+  if (!paused) {
+    runT += dt;
+    snap = augment(step(dt), dt);
+    view.pushSnapshot(snap, { interpolate: false });
+    hud.update(snap);
+  }
+  fp.update(dt, snap, lastInput);
+  hud.setLookCooldown(useFp && fp.active ? fp.cooldown : null);
+  view.render(dt, { draw });
+  if (snap && (snap.phase === 'won' || snap.phase === 'lost') && !ended) { ended = true; hud.showEnd(sim?.result || { won: snap.phase === 'won' }, { onRestart: () => location.reload(), onMenu: () => {} }); }
+  dbgUpdate();
+}
+let ended = false;
+
+// one-shot scenario triggers
+if (q.has('look')) setTimeout(() => fp.lookAround(), 1500);
+if (q.get('head')) { const h = q.get('head'); fp.setHead(h === 'left' ? 1.15 : h === 'right' ? -1.15 : 0, h === 'up' ? 0.3 : h === 'down' ? -0.3 : 0); }
+if (q.get('caption')) setTimeout(() => pendingEvents.push({ type: EV.SETPIECE, id: 'test_' + q.get('caption'), kind: q.get('caption'), phase: 'start' }), 900);
+if (q.get('end')) setTimeout(() => hud.showEnd({ won: q.get('end') === 'win', reason: q.get('end') === 'win' ? 'won' : 'busted', units: 8, quality: 0.86, payout: 48200, points: 23450, chaos: 41, knocked: 12, copsWrecked: 7, timeSec: 2381, stars: 2 }, { onRestart: () => {}, onMenu: () => {} }), 600);
+
+// ── loop (real time; tests drive it with __fp.advance for determinism) ─────
+let last = performance.now(), manual = q.has('manual');
+function raf(t) {
+  const dt = Math.min(1 / 20, Math.max(0, (t - last) / 1000)); last = t;
+  if (!manual) frame(dt);
+  requestAnimationFrame(raf);
+}
+requestAnimationFrame(raf);
+
+// keys
+addEventListener('keydown', (e) => {
+  if (e.repeat) return;
+  if (e.code === 'KeyC') fp.lookAround();
+  if (e.code === 'KeyM') audio.setMuted(!audio.muted);
+  if (e.code === 'KeyH') audio.horn(true);
+  if (e.code === 'KeyP') paused = !paused;
+  if (e.code === 'KeyF') fogOn = !fogOn;
+  if (e.code === 'KeyX') hud.showEnd({ won: true, units: 7, quality: 0.8, payout: 31000, points: 18000, stars: 2, timeSec: 2300 }, {});
+});
+addEventListener('keyup', (e) => { if (e.code === 'KeyH') audio.horn(false); });
+addEventListener('mousemove', (e) => fp.onPointer(e));
+
+// debug bar
+const dbg = document.getElementById('dbg');
+dbg.innerHTML = `<span id="dz"></span><span id="dg"></span><span id="dc"></span>
+  <a data-k="look">C look</a><a data-k="fog">fog</a><a data-k="flash">flash</a><a data-k="shock">shock</a><a data-k="cap">caption</a>`;
+dbg.addEventListener('click', (e) => {
+  const k = e.target.dataset.k;
+  if (k === 'look') fp.lookAround();
+  if (k === 'fog') fogOn = !fogOn;
+  if (k === 'flash') { forced.fx = { flash: 1 }; setTimeout(() => (forced.fx = null), 200); }
+  if (k === 'shock') { forced.fx = { shock: 0.9 }; setTimeout(() => (forced.fx = null), 1200); }
+  if (k === 'cap') pendingEvents.push({ type: EV.SETPIECE, id: 'x' + Math.random(), kind: 'tornado', phase: 'start' });
+});
+let dbgT = 0;
+function dbgUpdate() {
+  if (++dbgT % 10) return;
+  const ds = fp.driveState;
+  document.getElementById('dz').textContent = `${mode} z ${Math.round(snap?.rv?.z || 0)} · ${Math.round((snap?.rv?.speed || 0) * 2.237)} mph`;
+  document.getElementById('dg').textContent = `gear ${ds.gear} · ${Math.round(ds.rpm)} rpm · thr ${ds.throttle.toFixed(2)}`;
+  document.getElementById('dc').textContent = `calls ${view.stats.calls} (+mirror ${fp.stats.mirrorCalls})`;
+}
+
+window.__fp = {
+  fp, view, hud, audio, get sim() { return sim; }, get mode() { return mode; }, get snap() { return snap; },
+  advance(sec, fdt = 1 / 30, draw = true) { manual = true; let t = 0; while (t < sec - 1e-9) { const d = Math.min(fdt, sec - t); t += d; frame(d, draw || t >= sec - 1e-9); } return snap?.rv?.z; },
+  frame(d = 1 / 30) { manual = true; frame(d); },
+  settled: () => view.isSettled(),
+  stats: () => ({ ...view.stats, simMode: mode, phase: snap?.phase, stop: snap?.stop?.state ?? null, z: Math.round(snap?.rv?.z || 0), mirrorCalls: fp.stats.mirrorCalls, mirrorRenders: fp.stats.mirrorRenders, mirrorAvg: fp.mirrors ? fp.mirrors.callsPerPass : 0, mode: fp.mode, drive: fp.driveState }),
+  setFx(o) { forced.fx = o; }, head: (y, p) => fp.setHead(y, p), look: () => fp.lookAround(), event(ev) { pendingEvents.push(ev); },
+  setManual(v) { manual = !!v; },
+  ready: fp.ready,
+};
+</script>
+</body>
+</html>

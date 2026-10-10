@@ -1,0 +1,99 @@
+{
+  "_note": "All chemistry here is FICTIONAL game flavour. Ingredients, steps and numbers are invented for gameplay only.",
+  "startInventory": { "salts": 1, "solvent": 2, "fuel": 2 },
+  "ingredients": {
+    "salts":    { "name": "Mesa Salts",      "icon": "salts",    "color": "#e8e1cf", "foundAt": ["hardware", "farm"] },
+    "solvent":  { "name": "Canyon Solvent",  "icon": "solvent",  "color": "#9fd3c7", "foundAt": ["hardware", "lastgas"] },
+    "fuel":     { "name": "Burner Gas",      "icon": "fuel",     "color": "#e07a3f", "foundAt": ["gas_ice", "lastgas"] },
+    "ice":      { "name": "Bag of Ice",      "icon": "ice",      "color": "#cfe9f5", "foundAt": ["gas_ice", "lastgas"] },
+    "catalyst": { "name": "Copper Coil",     "icon": "catalyst", "color": "#c46b3c", "foundAt": ["junkyard"] },
+    "scrap":    { "name": "Scrap Metal",     "icon": "scrap",    "color": "#8d8f93", "foundAt": ["junkyard"] },
+    "syrup":    { "name": "Prickly Syrup",   "icon": "syrup",    "color": "#b4467a", "foundAt": ["farm"] }
+  },
+  "product": { "id": "glass", "name": "Desert Glass", "unitName": "bag", "color": "#7fd6c2" },
+  "recipes": [
+    {
+      "id": "street", "kind": "product", "name": "Street Batch",
+      "desc": "Quick and dirty. Low value, but you can cook it in the city.",
+      "needs": { "salts": 1, "solvent": 1, "fuel": 1 },
+      "units": 2, "valueMult": 0.7,
+      "steps": [
+        { "type": "measure", "label": "Pour the solvent", "targetMin": 0.58, "targetMax": 0.72, "pourRate": 0.28 },
+        { "type": "heat",    "label": "Bring it to temp", "bandMin": 170, "bandMax": 215, "duration": 8, "startTemp": 70, "fireAt": 265, "fumesPerSec": 0.05 },
+        { "type": "stir",    "label": "Stir steady",      "duration": 5, "targetRps": 1.0, "fumesPerSec": 0.03 },
+        { "type": "cool",    "label": "Keep the tray level", "duration": 6 },
+        { "type": "break",   "label": "Break & bag it",   "shards": 6 }
+      ]
+    },
+    {
+      "id": "premium", "kind": "product", "name": "Desert Glass (Premium)",
+      "desc": "The real recipe. Needs the Copper Coil and Prickly Syrup from the farms.",
+      "needs": { "syrup": 1, "salts": 1, "catalyst": 1, "solvent": 1, "fuel": 1, "ice": 1 },
+      "units": 4, "valueMult": 1.4,
+      "steps": [
+        { "type": "grind",   "label": "Grind the salts", "turns": 6 },
+        { "type": "measure", "label": "Measure the syrup", "targetMin": 0.64, "targetMax": 0.72, "pourRate": 0.24 },
+        { "type": "heat",    "label": "Hold the temperature", "bandMin": 190, "bandMax": 220, "duration": 11, "startTemp": 70, "fireAt": 260, "fumesPerSec": 0.07 },
+        { "type": "stir",    "label": "Stir in the catalyst", "duration": 7, "targetRps": 1.2, "fumesPerSec": 0.05 },
+        { "type": "cool",    "label": "Ice bath - keep it level", "duration": 9 },
+        { "type": "break",   "label": "Break & bag it", "shards": 10 }
+      ]
+    },
+    {
+      "id": "smoke", "kind": "gadget", "gadget": "smoke", "name": "Smoke Bomb",
+      "desc": "Driver drops it (Q). Cops driving through lose you for a few seconds.",
+      "needs": { "salts": 1, "fuel": 1 },
+      "steps": [
+        { "type": "measure", "label": "Pack the canister", "targetMin": 0.5, "targetMax": 0.7, "pourRate": 0.3 },
+        { "type": "stir",    "label": "Mix the fuse", "duration": 3, "targetRps": 1.0, "fumesPerSec": 0.02 }
+      ]
+    },
+    {
+      "id": "oil", "kind": "gadget", "gadget": "oil", "name": "Oil Slick",
+      "desc": "Driver drops it (E). Chasing cars spin out.",
+      "needs": { "solvent": 1, "scrap": 1 },
+      "steps": [
+        { "type": "hammer",  "label": "Punch a drip can", "nails": 4 },
+        { "type": "measure", "label": "Fill it up", "targetMin": 0.6, "targetMax": 0.85, "pourRate": 0.35 }
+      ]
+    },
+    {
+      "id": "nitro", "kind": "gadget", "gadget": "nitro", "name": "Nitro Brew",
+      "desc": "Driver fires it (Shift). A few seconds of serious speed - great for the canyon jump.",
+      "needs": { "fuel": 1, "ice": 1 },
+      "steps": [
+        { "type": "measure", "label": "Measure the brew", "targetMin": 0.62, "targetMax": 0.74, "pourRate": 0.28 },
+        { "type": "heat",    "label": "Pressurise", "bandMin": 140, "bandMax": 180, "duration": 5, "startTemp": 70, "fireAt": 240, "fumesPerSec": 0.03 }
+      ]
+    },
+    {
+      "id": "patch", "kind": "repair", "name": "Patch the Hull",
+      "desc": "Hammer scrap over the holes. Repairs the RV.",
+      "needs": { "scrap": 1 },
+      "repair": { "rv": 30 },
+      "steps": [ { "type": "hammer", "label": "Nail the patch", "nails": 6 } ]
+    },
+    {
+      "id": "icepack", "kind": "repair", "name": "Ice Pack",
+      "desc": "Patch up the crew.",
+      "needs": { "ice": 1 },
+      "repair": { "crew": 30 },
+      "steps": [ { "type": "grind", "label": "Crush the ice", "turns": 4 } ]
+    }
+  ],
+  "hazards": {
+    "fumesDecayVentOpen": 0.12,
+    "fumesDecayVentClosed": 0.01,
+    "fumesHurtAbove": 0.75,
+    "fumesCookDamagePerSec": 4,
+    "fumesDriverDamagePerSec": 1.5,
+    "fireRvDamagePerSec": 3,
+    "fireCookDamagePerSec": 2,
+    "fireGrowPerSec": 0.08,
+    "fireExplodeAt": 1.0,
+    "explosion": { "rvDamage": 25, "cookDamage": 30, "heat": 0.6 },
+    "ventSmokeHeatPerSec": 0.05,
+    "spottedHeat": 0.8,
+    "bumpSpillThreshold": 0.55
+  }
+}

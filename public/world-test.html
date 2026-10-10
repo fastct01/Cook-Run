@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cook &amp; Run — world test</title>
+<link rel="icon" href="data:,">
+<style>
+  html, body { margin: 0; height: 100%; background: #22262a; overflow: hidden; font: 600 12px/1.3 system-ui, sans-serif; color: #f1ead8; }
+  #view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  #bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: flex; gap: 3px; flex-wrap: wrap; justify-content: center;
+         padding: 4px 6px; background: rgba(34,38,42,.72); }
+  #bar a { color: #d9a83a; text-decoration: none; padding: 2px 5px; border-radius: 4px; background: rgba(0,0,0,.25); }
+  #bar a.on { background: #d9a83a; color: #22262a; }
+  #bar .sep { width: 10px; }
+  #st { position: fixed; left: 8px; top: 8px; z-index: 20; padding: 5px 8px; border-radius: 6px; background: rgba(34,38,42,.7); font-variant-numeric: tabular-nums; white-space: pre; }
+  #label { position: fixed; left: 50%; top: 10px; transform: translateX(-50%); z-index: 20; padding: 6px 12px; border-radius: 6px; background: rgba(34,38,42,.78);
+           font: 800 15px/1 system-ui, sans-serif; letter-spacing: .06em; text-transform: uppercase; border-bottom: 3px solid #d9a83a; }
+  body.shot #bar, body.shot #st { display: none; }
+  body.nolabel #label { display: none; }
+</style>
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="label"></div>
+<div id="st"></div>
+<div id="bar"></div>
+<script type="module">
+// ─────────────────────────────────────────────────────────────────────────────
+// VIEW-WORLD-A harness: the static world of the 40 km route, driven by a scripted RV.
+//   ?z=<metres> | ?z=<preset>     jump there (presets: every area, structure and stop)
+//   &hour=6.6…19.8                time of day override        &speed=<m/s> (0 = parked)
+//   &cam=chase|orbit|high|side    camera                      &look=<z> &lookU=<u> orbit/high target
+//   &t=<sec>                      advance the script before the first frame (deterministic)
+//   &angle=<rad>                  drawbridge leaf angle       &door=0..1 garage door (with &garage=1)
+//   &looted=id,id                 looted stops                &shot=1 hide UI   &label=0 hide title  &title=text
+// window.__world = { view, gen, presets, goto(z), setHour(h), stats(), settled(), advance(sec) }
+// ─────────────────────────────────────────────────────────────────────────────
+import * as THREE from 'three';
+import { loadData } from './js/data/loadData.js';
+import { WorldView } from './js/render/WorldView.js';
+import { FakeSnapshots } from './js/render/fakeSnapshots.js';
+
+const q = new URLSearchParams(location.search);
+const data = await loadData();
+const route = data.route;
+const AREA_Z = { ironworks: 330, downtown: 3560, oldtown: 8470, docks: 11560, suburbs: 14660, interstate: 19870, stripmall: 26420, farmland: 29640, foothills: 32240, saltflats: 35520, ghosttown: 37150, canyon: 38380, hideout: 39560 };
+const PRESETS = {};
+for (const b of route.biomes) PRESETS[b.id] = { z: AREA_Z[b.id] ?? b.from + 300, label: b.name, group: 'area' };
+Object.assign(PRESETS, {
+  garage: { z: 52, speed: 0, garage: true, cam: 'orbit', look: 45, lookU: 12, label: "Rook's Garage", group: 'struct' },
+  rail: { z: 1700, label: 'Rail crossing', group: 'struct' },
+  drawbridge: { z: 13090, speed: 0, cam: 'high', look: 13205, label: 'Drawbridge', group: 'struct' },
+  overpass: { z: 20400, label: 'Overpass', group: 'struct' },
+  toll: { z: 24400, label: 'Toll plaza', group: 'struct' },
+  carwash: { z: 28110, label: 'Car wash', group: 'struct', lane: 1 },
+  cattle: { z: 29420, label: 'Cattle grid', group: 'struct' },
+  river: { z: 33500, label: 'Covered bridge', group: 'struct' },
+  canyonbridge: { z: 38790, label: 'Canyon bridge', group: 'struct' },
+  sell: { z: 39700, label: 'Sell point', group: 'struct' },
+});
+for (const st of route.stops) PRESETS['stop_' + st.id] = { z: st.z - 330, label: 'Stop: ' + st.name, group: 'stop' };
+
+const key = q.get('z') || 'ironworks';
+const P = PRESETS[key] ? { ...PRESETS[key] } : { z: +key || 300, label: 'z ' + (+key || 300) };
+const num = (k, d) => (q.has(k) && q.get(k) !== '' && isFinite(+q.get(k)) ? +q.get(k) : d);
+const hour = num('hour', null);
+const speed = num('speed', P.speed ?? 18);
+const camMode = q.get('cam') || P.cam || 'chase';
+const look = num('look', P.look ?? null), lookU = num('lookU', P.lookU ?? 0);
+if (q.has('shot')) document.body.classList.add('shot');
+if (q.get('label') === '0') document.body.classList.add('nolabel');
+document.getElementById('label').textContent = (q.get('title') || P.label) + (hour != null && !q.get('title') ? ` · ${hour.toFixed(1)} h` : '');
+
+const canvas = document.getElementById('view');
+const seed = num('seed', route.defaultSeed);
+const view = new WorldView(canvas, data, { seed, role: 'driver' });
+const gen = new FakeSnapshots(data, {
+  seed, preset: 'route', start: P.z, speed, hour,
+  looted: q.get('looted') ? q.get('looted').split(',') : null,
+  bridgeAngle: num('angle', P.bridgeAngle ?? null), garage: q.get('garage') === '1' || !!P.garage, door: num('door', null), lane: num('lane', P.lane ?? 0),
+});
+if (hour != null) view.setHourOverride(hour);
+await view.ready;
+
+// ── camera controllers (harness only) ──
+const track = gen.track;
+const tgt = new THREE.Vector3();
+let orbitA = num('ang', 0.9);
+const controllers = {
+  orbit: { update(dt, cam, snap) {
+    const z = look ?? snap.rv.z;
+    tgt.set(track.xAt(z, lookU), 3, z);
+    orbitA += dt * 0.12;
+    const r = num('r', 48);
+    cam.position.set(tgt.x + Math.sin(orbitA) * r, num('h', 24), tgt.z + Math.cos(orbitA) * r);
+    cam.fov = 50; cam.updateProjectionMatrix(); cam.lookAt(tgt);
+  } },
+  high: { update(dt, cam, snap) {
+    const z = look ?? snap.rv.z;
+    tgt.set(track.xAt(z + 40, lookU), 0, z + 40);
+    cam.position.set(track.xAt(z - 70, lookU - num('side', 18)), num('h', 46), z - 70);
+    cam.fov = 55; cam.updateProjectionMatrix(); cam.lookAt(tgt);
+  } },
+  side: { update(dt, cam, snap) {
+    const z = look ?? snap.rv.z;
+    tgt.set(track.xAt(z + 10, 0), 2.5, z + 10);
+    cam.position.set(track.xAt(z - 14, -num('side', 16)), num('h', 4), z - 14);
+    cam.fov = 60; cam.updateProjectionMatrix(); cam.lookAt(tgt);
+  } },
+};
+if (controllers[camMode]) view.setCameraController(controllers[camMode]);
+
+// ── loop ──
+let T = 0, last = performance.now(), paused = false;
+function step(dt, draw = true) {
+  T += dt;
+  const snap = gen.snapshot(T);
+  view.pushSnapshot(snap, { interpolate: false });
+  view.render(dt, { draw });
+}
+const advance = (sec, dt = 1 / 30) => { const n = Math.max(1, Math.round(sec / dt)); for (let i = 0; i < n; i++) step(dt, i === n - 1); };
+if (q.has('t')) advance(+q.get('t'));
+window.__world = {
+  view, gen, presets: PRESETS, advance,
+  goto(z) { gen.P.start = z; T = 0; step(0); },
+  setHour(h) { view.setHourOverride(h); gen.hour = h; },
+  stats: () => ({ ...view.stats, z: +(view.cur?.rv?.z ?? 0).toFixed(1), T: +T.toFixed(2), built: view.chunks?.stats.built, disposed: view.chunks?.stats.disposed, maxBuildMs: +(view.chunks?.stats.maxBuildMs ?? 0).toFixed(1) }),
+  settled: () => view.isSettled(),
+  pause: (p = true) => { paused = p; },
+};
+window.__view = view;
+window.__settled = () => view.isSettled();
+window.__stats = window.__world.stats;
+
+const stEl = document.getElementById('st');
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  if (!paused) step(dt);
+  if (Math.floor(now / 300) !== Math.floor((now - dt * 1000) / 300)) {
+    const s = view.stats;
+    stEl.textContent = `z ${(view.cur?.rv?.z ?? 0).toFixed(0)}  ${view.cur?.area?.name ?? ''}\nhour ${s.hour}  calls ${s.calls}  tris ${(s.triangles / 1000).toFixed(0)}k\nchunks ${s.chunks}  geos ${s.geometries}  tex ${s.textures}`;
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+addEventListener('resize', () => view.resize());
+addEventListener('keydown', (e) => { if (e.code === 'KeyP') paused = !paused; });
+
+// ── preset bar ──
+const bar = document.getElementById('bar');
+const link = (k) => { const u = new URLSearchParams(q); u.set('z', k); u.delete('look'); return '?' + u.toString(); };
+let html = '', grp = null;
+for (const [k, p] of Object.entries(PRESETS)) {
+  if (p.group !== grp) { if (grp) html += '<span class="sep"></span>'; grp = p.group; }
+  html += `<a href="${link(k)}" class="${k === key ? 'on' : ''}" title="${p.label} (z ${p.z})">${k.replace('stop_', '⛽')}</a>`;
+}
+for (const h of [6.6, 9, 12.5, 16.6, 18.6, 19.8]) { const u = new URLSearchParams(q); u.set('hour', h); html += `<a href="?${u}">${h}h</a>`; }
+for (const c of ['chase', 'orbit', 'high', 'side']) { const u = new URLSearchParams(q); u.set('cam', c); html += `<a href="?${u}" class="${c === camMode ? 'on' : ''}">${c}</a>`; }
+bar.innerHTML = html;
+</script>
+</body>
+</html>

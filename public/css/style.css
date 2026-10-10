@@ -1,0 +1,125 @@
+/* Cook & Run — page shell & layout (HUD, cook lab and lobby have their own stylesheets). */
+:root {
+  --charcoal: #22262a; --cream: #f1ead8; --teal: #4f8f8a; --mustard: #d9a83a; --rust: #9c4a32; --sky: #a7c7d6;
+  --red: #d8433a; --blue: #3a6fd8;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color-scheme: dark;
+  --font-head: Impact, "Haettenschweiler", "Arial Narrow Bold", "Arial Black", var(--font);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--charcoal); color: var(--cream); font-family: var(--font); overflow: hidden; overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
+body { touch-action: none; }
+[hidden] { display: none !important; }
+
+/* ── boot splash ─────────────────────────────────────────────────────────── */
+#boot { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: radial-gradient(120% 80% at 50% 110%, #c98a52 0%, #8a5a3c 35%, var(--charcoal) 75%); transition: opacity .4s; }
+#boot.gone { opacity: 0; pointer-events: none; }
+.boot-card { text-align: center; padding: 16px; }
+.boot-logo { font: 400 clamp(44px, 9vw, 96px)/.9 var(--font-head); letter-spacing: .02em; color: var(--mustard); text-shadow: 0 4px 0 #6b4a1c, 0 10px 30px rgba(0,0,0,.4); }
+.boot-logo span { color: var(--teal); }
+.boot-msg { margin-top: 18px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; font-size: 13px; opacity: .8; }
+.boot-bar { width: min(280px, 70vw); height: 6px; margin: 14px auto 0; border-radius: 3px; background: rgba(241,234,216,.15); overflow: hidden; }
+.boot-bar i { display: block; height: 100%; width: 40%; background: var(--mustard); border-radius: 3px; animation: bootbar 1.1s ease-in-out infinite; }
+@keyframes bootbar { 0% { transform: translateX(-110%); } 100% { transform: translateX(260%); } }
+#boot.error .boot-bar { display: none; }
+#boot.error .boot-msg { color: #ffb4a6; text-transform: none; letter-spacing: 0; font-size: 15px; max-width: 520px; line-height: 1.45; }
+
+/* ── game shell ─────────────────────────────────────────────────────────── */
+#game { position: fixed; inset: 0; }
+#viewWrap { position: absolute; inset: 0; overflow: hidden; background: #8fb4c4; }
+#view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
+#hud { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+#labWrap { display: none; position: absolute; z-index: 6; }
+#lab { position: absolute; inset: 0; }
+#labToggle { display: none; }
+
+/* Driver online: the road fills the screen. */
+body.role-driver:not(.lab-local) #labWrap { display: none; }
+
+/* Solo (or driver who took over the lab): lab docked at the right edge, between the score box and the gadget slots. */
+body.lab-local #labWrap {
+  display: block; right: 12px; top: 112px; bottom: 120px; width: min(500px, 38vw); min-width: 420px;
+  border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,.45), 0 0 0 2px rgba(79,143,138,.55);
+  overflow: visible; transition: transform .25s ease, opacity .25s ease;
+}
+body.lab-local #lab { border-radius: 12px; overflow: hidden; }
+body.lab-local #labToggle {
+  display: block; position: absolute; left: -38px; top: 50%; transform: translateY(-50%); width: 34px; height: 84px; border: 0; border-radius: 8px 0 0 8px;
+  background: var(--teal); color: var(--cream); font: 800 11px/1 var(--font); letter-spacing: .14em; writing-mode: vertical-rl; cursor: pointer; box-shadow: -4px 4px 16px rgba(0,0,0,.35);
+}
+body.lab-local.lab-hidden #labWrap { transform: translateX(calc(100% + 14px)); }
+body.lab-local.lab-hidden #labToggle { background: var(--mustard); color: var(--charcoal); }
+@media (max-height: 560px) { body.lab-local #labWrap { top: 70px; bottom: 96px; } }
+@media (max-width: 760px) {
+  body.lab-local #labWrap { left: 8px; right: 8px; width: auto; top: auto; bottom: 8px; height: 46%; }
+  body.lab-local #labToggle { left: 50%; top: -30px; transform: translateX(-50%); width: 84px; height: 28px; writing-mode: horizontal-tb; border-radius: 8px 8px 0 0; }
+  body.lab-local.lab-hidden #labWrap { transform: translateY(calc(100% + 14px)); }
+  body.lab-local:not(.lab-hidden) #touch { display: none !important; }
+}
+
+/* Cook online: rear-window view on top, the lab below. */
+body.role-cook #viewWrap { bottom: auto; height: 40%; }
+body.role-cook #labWrap { display: block; left: 0; right: 0; bottom: 0; top: 40%; border-top: 3px solid var(--teal); }
+@media (min-aspect-ratio: 21/10) { body.role-cook #viewWrap { height: 36%; } body.role-cook #labWrap { top: 36%; } }
+@media (max-aspect-ratio: 4/5) { body.role-cook #viewWrap { height: 32%; } body.role-cook #labWrap { top: 32%; } }
+
+/* ── overlays (pause, notices) ─────────────────────────────────────────── */
+#overlay { position: absolute; inset: 0; z-index: 30; display: grid; place-items: center; background: rgba(20,22,25,.62); backdrop-filter: blur(3px); }
+.ov-card { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; background: var(--charcoal); border-radius: 14px; padding: 22px 22px 18px; box-shadow: 0 20px 60px rgba(0,0,0,.5), 0 0 0 2px rgba(241,234,216,.08); }
+.ov-title { font: 400 40px/1 var(--font-head); color: var(--mustard); letter-spacing: .02em; margin: 0 0 6px; }
+.ov-sub { margin: 0 0 16px; opacity: .8; font-size: 14px; line-height: 1.45; }
+.ov-keys { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 14px; margin: 0 0 18px; }
+.ov-keys kbd { display: inline-block; min-width: 26px; padding: 3px 7px; border-radius: 5px; background: #33393f; box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); font: 700 12px/1.3 var(--font); color: var(--cream); text-align: center; }
+.ov-btns { display: flex; gap: 10px; flex-wrap: wrap; }
+.ov-btn { flex: 1 1 140px; padding: 12px 16px; border: 0; border-radius: 10px; font: 800 15px/1 var(--font); letter-spacing: .04em; cursor: pointer; background: #3a4147; color: var(--cream); }
+.ov-btn.primary { background: var(--mustard); color: var(--charcoal); }
+.ov-btn:focus-visible { outline: 3px solid var(--sky); outline-offset: 2px; }
+
+/* small top-right pills (latency, mute, pause) */
+#pills { position: absolute; z-index: 8; left: 14px; bottom: 98px; display: flex; gap: 6px; pointer-events: auto; opacity: .8; }
+body.role-cook #pills { left: auto; right: 10px; bottom: 8px; }
+body.touch.role-driver #pills, body.touch.lab-local #pills { left: 50%; bottom: auto; top: 46px; transform: translateX(-50%); }
+.pill { border: 0; border-radius: 999px; padding: 4px 10px; background: rgba(34,38,42,.72); color: var(--cream); font: 700 11px/1.2 var(--font); letter-spacing: .06em; cursor: pointer; }
+.pill.static { cursor: default; }
+.pill.bad { background: rgba(156,74,50,.9); }
+
+/* ── touch controls (driver on phones / tablets) ──────────────────────── */
+#touch { display: none; position: absolute; inset: 0; z-index: 7; pointer-events: none; }
+body.touch.role-driver #touch, body.touch.lab-local #touch { display: block; }
+.tc { position: absolute; pointer-events: auto; border: 0; border-radius: 16px; background: rgba(34,38,42,.42); color: var(--cream); font: 800 13px/1 var(--font); letter-spacing: .06em; display: grid; place-items: center; touch-action: none; user-select: none; -webkit-user-select: none; box-shadow: inset 0 0 0 2px rgba(241,234,216,.18); }
+.tc.on { background: rgba(217,168,58,.65); color: var(--charcoal); }
+.tc-left  { left: 14px; bottom: 22px; width: 74px; height: 92px; }
+.tc-right { left: 98px; bottom: 22px; width: 74px; height: 92px; }
+.tc-gas   { right: 14px; bottom: 22px; width: 82px; height: 112px; background: rgba(79,143,138,.5); }
+.tc-brake { right: 106px; bottom: 22px; width: 74px; height: 80px; background: rgba(156,74,50,.5); }
+.tc-small { width: 54px; height: 44px; border-radius: 12px; font-size: 11px; }
+.tc-horn  { left: 14px; bottom: 126px; }
+.tc-smoke { right: 14px; bottom: 146px; }
+.tc-oil   { right: 74px; bottom: 146px; }
+.tc-nitro { right: 134px; bottom: 146px; }
+.tc-hb    { right: 188px; bottom: 22px; }
+body.touch .crh-speedo { transform: scale(.78); transform-origin: 50% 100%; }
+
+/* rotate hint for phones in portrait (driver) */
+#rotate { display: none; }
+@media (orientation: portrait) and (max-width: 600px) {
+  body.touch.role-driver:not(.lab-local) #rotate { display: grid; position: absolute; z-index: 9; left: 50%; top: 52%; transform: translate(-50%, -50%); padding: 10px 14px; border-radius: 10px; background: rgba(34,38,42,.8); font: 700 12px/1.3 var(--font); text-align: center; pointer-events: none; }
+}
+
+/* ── 3D van lab ─────────────────────────────────────────────────────────── */
+/* Online cook: the 3D cut-away van fills the screen (no 2D panel). */
+body.lab3d #labWrap { display: none !important; }
+body.role-cook.lab3d #viewWrap { bottom: 0; height: auto; }
+body.lab3d.role-cook #pills, body.in-lab #pills { left: auto; right: 14px; top: auto; bottom: 122px; transform: none; }
+/* Doc on the roof: the lab meters move up above the device bar, so the pills move up with them */
+body.lab3d.role-cook:has(.vh-roofmode) #pills, body.in-lab:has(.vh-roofmode) #pills { bottom: 184px; }
+/* Solo, cooking in the back: hide the driving-only HUD pieces, keep heat / progress / product / HP. */
+body.in-lab .crh-bc, body.in-lab .crh-br, body.in-lab .crh-chaos, body.in-lab .crh-next,
+body.in-lab .crh-load, body.in-lab .crh-prompt { display: none !important; }
+body.in-lab .crh-bl { bottom: 52px; }
+body.mode-solo .vh-step, body.mode-solo .vh-result { top: 104px; }
+/* touch: seat-swap button; in the lab the driving buttons go away (tap/drag drives Doc) */
+.tc-seat { left: 50%; transform: translateX(-50%); bottom: 22px; width: 76px; background: rgba(79,143,138,.75); }
+body.lab3d.touch #touch { display: block; }
+body.in-lab #touch .tc:not(.tc-seat) { display: none; }
+body.in-lab .tc-seat { bottom: auto; top: 46px; }

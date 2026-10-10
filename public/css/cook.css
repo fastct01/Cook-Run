@@ -1,0 +1,524 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   Cook & Run — Cook lab panel. Everything is scoped under .cook-ui.
+   Palette: cream #f1ead8 · charcoal #22262a · teal #4f8f8a · mustard #d9a83a · rust #9c4a32
+   ───────────────────────────────────────────────────────────────────────────── */
+.cook-ui {
+  --ck-cream: #f1ead8;
+  --ck-cream-2: #cfc7b3;
+  --ck-cream-3: #9d978a;
+  --ck-char: #22262a;
+  --ck-char-2: #2a2f33;
+  --ck-char-3: #343a3f;
+  --ck-char-4: #41484e;
+  --ck-ink: #16191c;
+  --ck-teal: #4f8f8a;
+  --ck-teal-2: #3d7671;
+  --ck-mustard: #d9a83a;
+  --ck-rust: #9c4a32;
+  --ck-rust-2: #c7583e;
+  --ck-good: #8fb36a;
+  --ck-radius: 10px;
+  --ck-gap: 10px;
+  --ck-font: Inter, "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+  color: var(--ck-cream);
+  background: #1b1e21;
+  font-family: var(--ck-font);
+  font-size: 14px;
+  line-height: 1.3;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.cook-ui *, .cook-ui *::before, .cook-ui *::after { box-sizing: border-box; }
+.cook-ui button { font: inherit; color: inherit; cursor: pointer; border: 0; background: none; padding: 0; margin: 0; }
+.cook-ui button:disabled { cursor: default; }
+.cook-ui button:focus { outline: none; }
+.cook-ui kbd {
+  display: inline-block; min-width: 1.5em; padding: 0 .35em; border-radius: 4px;
+  background: var(--ck-ink); color: var(--ck-cream-2); font: 700 10px/1.6 var(--ck-font);
+  text-align: center; box-shadow: inset 0 -1px 0 rgba(255,255,255,.08);
+}
+.cook-ui .ck-ico { width: 18px; height: 18px; flex: none; display: block; }
+.cook-ui [hidden] { display: none !important; }
+
+/* ── shell grid (full mode) ──────────────────────────────────────────────── */
+.cook-ui .ck-shell {
+  position: absolute; inset: 0;
+  display: grid;
+  grid-template-columns: minmax(250px, 300px) minmax(0, 1fr) minmax(220px, 250px);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "head head head" "left stage right";
+  gap: var(--ck-gap);
+  padding: var(--ck-gap);
+}
+.cook-ui .ck-head { grid-area: head; }
+.cook-ui .ck-left { grid-area: left; }
+.cook-ui .ck-stage { grid-area: stage; }
+.cook-ui .ck-right { grid-area: right; }
+.cook-ui .ck-toolbar { display: none; }
+
+.cook-ui .ck-h {
+  margin: 0 0 8px; font-size: 12px; font-weight: 800; letter-spacing: .02em;
+  color: var(--ck-cream-3);
+}
+
+/* ── header strip ────────────────────────────────────────────────────────── */
+.cook-ui .ck-head {
+  display: flex; align-items: center; gap: 14px;
+  min-height: 56px; padding: 8px 12px 8px 14px;
+  background: var(--ck-char); border-radius: var(--ck-radius);
+  box-shadow: inset 0 -3px 0 rgba(0,0,0,.25);
+}
+.cook-ui .ck-book-toggle {
+  display: none; align-items: center; gap: 6px; height: 38px; padding: 0 12px;
+  border-radius: 8px; background: var(--ck-char-3); font-weight: 800;
+}
+.cook-ui .ck-book-toggle .ck-ico { width: 18px; height: 18px; color: var(--ck-mustard); }
+.cook-ui .ck-batch { min-width: 0; flex: 1 1 auto; }
+.cook-ui .ck-batch-name {
+  font-size: 22px; font-weight: 900; letter-spacing: -.01em; line-height: 1.05;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cook-ui .ck-step-label {
+  margin-top: 3px; font-size: 13px; font-weight: 600; color: var(--ck-cream-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cook-ui .ck-dots { display: flex; gap: 6px; flex: none; }
+.cook-ui .ck-dot {
+  width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--ck-char-3); color: var(--ck-cream-3);
+  box-shadow: inset 0 0 0 2px rgba(255,255,255,.04);
+}
+.cook-ui .ck-dot .ck-ico { width: 17px; height: 17px; }
+.cook-ui .ck-dot.is-now { background: var(--ck-mustard); color: var(--ck-char); box-shadow: 0 0 0 3px rgba(217,168,58,.25); }
+.cook-ui .ck-dot.is-good { background: var(--ck-teal); color: var(--ck-cream); }
+.cook-ui .ck-dot.is-ok { background: #8a7a3d; color: var(--ck-cream); }
+.cook-ui .ck-dot.is-bad, .cook-ui .ck-dot.is-fail { background: var(--ck-rust); color: var(--ck-cream); }
+.cook-ui .ck-quality {
+  flex: none; display: flex; flex-direction: column; align-items: flex-end; padding: 0 4px 0 6px;
+  border-left: 2px solid var(--ck-char-3); padding-left: 14px;
+}
+.cook-ui .ck-quality span { font-size: 11px; font-weight: 700; color: var(--ck-cream-3); }
+.cook-ui .ck-quality b { font-size: 24px; font-weight: 900; line-height: 1; color: var(--ck-cream); }
+.cook-ui .ck-quality[data-tone="good"] b { color: #9fd3c7; }
+.cook-ui .ck-quality[data-tone="ok"] b { color: var(--ck-mustard); }
+.cook-ui .ck-quality[data-tone="bad"] b { color: var(--ck-rust-2); }
+.cook-ui .ck-abort {
+  flex: none; display: flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px;
+  border-radius: 8px; background: transparent; color: var(--ck-cream-2); font-weight: 700; font-size: 13px;
+  box-shadow: inset 0 0 0 2px var(--ck-char-4);
+}
+.cook-ui .ck-abort:hover { color: var(--ck-cream); box-shadow: inset 0 0 0 2px var(--ck-rust); background: rgba(156,74,50,.18); }
+.cook-ui .ck-abort .ck-ico { width: 16px; height: 16px; }
+
+/* ── left: recipe book + pantry ──────────────────────────────────────────── */
+.cook-ui .ck-left {
+  display: flex; flex-direction: column; gap: var(--ck-gap); min-height: 0;
+}
+.cook-ui .ck-book-scroll {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  padding: 12px; border-radius: var(--ck-radius); background: var(--ck-char);
+  scrollbar-width: thin; scrollbar-color: var(--ck-char-4) transparent;
+}
+.cook-ui .ck-book-scroll::-webkit-scrollbar { width: 8px; }
+.cook-ui .ck-book-scroll::-webkit-scrollbar-thumb { background: var(--ck-char-4); border-radius: 4px; }
+.cook-ui .ck-group + .ck-group { margin-top: 14px; }
+.cook-ui .ck-card {
+  position: relative; padding: 10px 10px 10px 13px; margin-bottom: 8px;
+  border-radius: 9px; background: var(--ck-char-2);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.04);
+}
+.cook-ui .ck-card::before {
+  content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 4px; border-radius: 0 3px 3px 0;
+  background: var(--ck-char-4);
+}
+.cook-ui .ck-card.ck-kind-product.is-ready::before { background: #7fd6c2; }
+.cook-ui .ck-card.ck-kind-gadget.is-ready::before { background: var(--ck-mustard); }
+.cook-ui .ck-card.ck-kind-repair.is-ready::before { background: #8fb36a; }
+.cook-ui .ck-card.is-active { background: #31403f; box-shadow: inset 0 0 0 2px var(--ck-teal); }
+.cook-ui .ck-card.is-missing .ck-card-name { color: var(--ck-cream-2); }
+.cook-ui .ck-card-top { display: flex; align-items: baseline; gap: 8px; }
+.cook-ui .ck-card-name { flex: 1 1 auto; min-width: 0; font-size: 15px; font-weight: 900; letter-spacing: -.005em; line-height: 1.15; }
+.cook-ui .ck-card-yield { flex: none; font-size: 11px; font-weight: 800; color: var(--ck-mustard); white-space: nowrap; }
+.cook-ui .ck-kind-product .ck-card-yield { color: #9fd3c7; }
+.cook-ui .ck-kind-repair .ck-card-yield { color: #a9c98a; }
+.cook-ui .ck-card-desc { margin-top: 4px; font-size: 12px; line-height: 1.35; color: var(--ck-cream-3); }
+.cook-ui .ck-card-mid { margin-top: 7px; }
+.cook-ui .ck-card-steps { display: flex; gap: 3px; color: var(--ck-cream-3); }
+.cook-ui .ck-card-steps span { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 5px; background: rgba(0,0,0,.18); }
+.cook-ui .ck-card-steps .ck-ico { width: 14px; height: 14px; }
+.cook-ui .ck-card-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.cook-ui .ck-needs { flex: 1 1 auto; display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.cook-ui .ck-need {
+  display: inline-flex; align-items: center; gap: 2px; height: 24px; padding: 0 6px 0 3px;
+  border-radius: 6px; background: rgba(143,179,106,.14); font-size: 12px;
+}
+.cook-ui .ck-need .ck-ico { width: 18px; height: 18px; }
+.cook-ui .ck-need b { font-weight: 900; color: #b9d79a; }
+.cook-ui .ck-need i { font-style: normal; font-weight: 700; color: var(--ck-cream-3); }
+.cook-ui .ck-need.is-miss { background: rgba(156,74,50,.24); }
+.cook-ui .ck-need.is-miss b { color: #ef8f74; }
+.cook-ui .ck-need.is-miss .ck-ico { opacity: .55; }
+.cook-ui .ck-cook {
+  flex: none; height: 32px; min-width: 70px; max-width: 120px; padding: 0 14px; border-radius: 8px;
+  background: var(--ck-teal); color: var(--ck-cream); font-weight: 900; font-size: 14px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  box-shadow: inset 0 -3px 0 rgba(0,0,0,.22);
+  transition: background-color .12s, transform .08s;
+}
+.cook-ui .ck-cook:hover:not(:disabled) { background: #5aa29c; }
+.cook-ui .ck-cook:active:not(:disabled) { transform: translateY(1px); box-shadow: inset 0 -1px 0 rgba(0,0,0,.22); }
+.cook-ui .ck-cook:disabled { background: var(--ck-char-3); color: var(--ck-cream-3); box-shadow: none; font-size: 11px; font-weight: 800; }
+.cook-ui .ck-card.is-active .ck-cook:disabled { background: transparent; color: #9fd3c7; font-size: 13px; }
+
+.cook-ui .ck-pantry { flex: none; padding: 12px; border-radius: var(--ck-radius); background: var(--ck-char); }
+.cook-ui .ck-pantry-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 6px; }
+.cook-ui .ck-jar { display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 7px 0 3px; border-radius: 7px; background: var(--ck-char-2); min-width: 0; }
+.cook-ui .ck-jar .ck-ico { width: 20px; height: 20px; }
+.cook-ui .ck-jar span { flex: 1 1 auto; min-width: 0; font-size: 11.5px; letter-spacing: -.01em; font-weight: 600; color: var(--ck-cream-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cook-ui .ck-jar b { font-size: 14px; font-weight: 900; }
+.cook-ui .ck-jar.is-empty { opacity: .5; }
+
+/* ── centre: stage + canvas ──────────────────────────────────────────────── */
+.cook-ui .ck-stage {
+  position: relative; min-width: 0; min-height: 0; overflow: hidden;
+  border-radius: var(--ck-radius); background: #2c2e2b;
+  box-shadow: 0 0 0 2px #15181a, inset 0 0 0 1px rgba(255,255,255,.04);
+}
+.cook-ui .ck-scene {
+  position: absolute; inset: -6px; will-change: transform;
+}
+.cook-ui .ck-canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+
+.cook-ui .ck-alarm {
+  position: absolute; left: 50%; top: 14%; transform: translateX(-50%);
+  width: max-content; max-width: calc(100% - 24px); padding: 12px 20px; border-radius: 10px;
+  background: var(--ck-rust); color: var(--ck-cream); font-size: 20px; font-weight: 900; letter-spacing: .01em;
+  text-align: center; pointer-events: none; white-space: nowrap;
+  box-shadow: 0 0 0 4px rgba(156,74,50,.35), 0 10px 30px rgba(0,0,0,.45);
+  animation: ck-alarm .5s steps(1, end) infinite;
+}
+.cook-ui .ck-alarm span { display: block; overflow: hidden; text-overflow: ellipsis; }
+@keyframes ck-alarm { 0% { background: var(--ck-rust); } 50% { background: #c03c2c; box-shadow: 0 0 0 7px rgba(224,69,58,.4), 0 10px 30px rgba(0,0,0,.45); } }
+.cook-ui .ck-smoke {
+  position: absolute; right: 12px; bottom: 12px; display: flex; align-items: center; gap: 7px;
+  max-width: calc(100% - 24px); padding: 7px 12px 7px 9px; border-radius: 8px;
+  background: rgba(26,29,32,.88); color: var(--ck-mustard); font-size: 13px; font-weight: 800;
+  pointer-events: none; box-shadow: inset 0 0 0 1px rgba(217,168,58,.35);
+}
+.cook-ui .ck-smoke .ck-ico { color: var(--ck-cream-2); width: 20px; height: 20px; }
+.cook-ui .ck-bump {
+  position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%) rotate(-6deg) scale(.6);
+  padding: 4px 16px; border-radius: 8px; background: var(--ck-mustard); color: var(--ck-char);
+  font-size: 34px; font-weight: 900; letter-spacing: .02em; opacity: 0; pointer-events: none;
+  box-shadow: 0 6px 0 rgba(0,0,0,.25);
+}
+.cook-ui .ck-bump.is-on { animation: ck-bump .75s ease-out; }
+@keyframes ck-bump {
+  0% { opacity: 0; transform: translate(-50%, -50%) rotate(-6deg) scale(.6); }
+  12% { opacity: 1; transform: translate(-50%, -50%) rotate(-4deg) scale(1.12); }
+  30% { transform: translate(-50%, -50%) rotate(-6deg) scale(1); }
+  75% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -62%) rotate(-6deg) scale(1); }
+}
+.cook-ui .ck-toasts {
+  position: absolute; left: 12px; bottom: 12px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+  max-width: min(60%, 360px); pointer-events: none;
+}
+.cook-ui .ck-toast {
+  padding: 7px 11px; border-radius: 8px; font-size: 13px; font-weight: 700; line-height: 1.25;
+  background: rgba(26,29,32,.92); color: var(--ck-cream); box-shadow: 0 4px 12px rgba(0,0,0,.25);
+  animation: ck-toast-in .18s ease-out; transition: opacity .35s, transform .35s;
+}
+.cook-ui .ck-toast-bad { background: rgba(156,74,50,.95); }
+.cook-ui .ck-toast-good { background: rgba(61,118,113,.95); }
+.cook-ui .ck-toast.is-out { opacity: 0; transform: translateY(6px); }
+@keyframes ck-toast-in { from { opacity: 0; transform: translateY(8px); } }
+
+/* result card */
+.cook-ui .ck-result {
+  position: absolute; inset: 0; display: grid; place-items: center; padding: 16px; cursor: pointer;
+  background: rgba(16,18,20,.42);
+}
+.cook-ui .ck-result-card {
+  width: min(380px, 100%); max-height: 100%; overflow: hidden; padding: 18px 20px 14px; border-radius: 12px;
+  background: var(--ck-cream); color: var(--ck-char); box-shadow: 0 14px 40px rgba(0,0,0,.5);
+  transform: rotate(-1.2deg); animation: ck-pop .28s cubic-bezier(.2,1.4,.4,1);
+  border-left: 8px solid var(--ck-teal);
+}
+.cook-ui .ck-result-card.is-fail { border-left-color: var(--ck-rust); }
+@keyframes ck-pop { from { opacity: 0; transform: rotate(-1.2deg) scale(.85); } }
+.cook-ui .ck-result-kicker { font-size: 13px; font-weight: 700; color: #6b665c; }
+.cook-ui .ck-result-title { font-size: 30px; font-weight: 900; letter-spacing: -.02em; line-height: 1.05; margin-top: 2px; }
+.cook-ui .is-fail .ck-result-title { color: var(--ck-rust); }
+.cook-ui .ck-result-q { display: flex; align-items: baseline; gap: 6px; margin-top: 6px; }
+.cook-ui .ck-result-q b { font-size: 40px; font-weight: 900; line-height: 1; color: var(--ck-teal-2); letter-spacing: -.02em; }
+.cook-ui .ck-result-q span { font-size: 14px; font-weight: 700; color: #6b665c; }
+.cook-ui .ck-result-gain { margin-top: 8px; font-size: 15px; font-weight: 800; }
+.cook-ui .ck-result-gain kbd { background: var(--ck-char); color: var(--ck-cream); }
+.cook-ui .ck-result-steps { list-style: none; margin: 10px 0 0; padding: 8px 0 0; border-top: 2px dashed rgba(34,38,42,.15); display: grid; gap: 3px; }
+.cook-ui .ck-result-steps li { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #4a4740; }
+.cook-ui .ck-result-steps li .ck-ico { width: 16px; height: 16px; color: #8a8478; }
+.cook-ui .ck-result-steps li span { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cook-ui .ck-result-steps li b { font-weight: 900; }
+.cook-ui .ck-result-steps b[data-tone="good"] { color: var(--ck-teal-2); }
+.cook-ui .ck-result-steps b[data-tone="ok"] { color: #a07818; }
+.cook-ui .ck-result-steps b[data-tone="bad"] { color: var(--ck-rust); }
+.cook-ui .ck-result-hint { margin-top: 10px; font-size: 11px; font-weight: 700; color: #8a8478; text-align: right; }
+
+/* cook down */
+.cook-ui .ck-down {
+  position: absolute; inset: 0; display: grid; place-items: center; padding: 16px;
+  background: rgba(12, 14, 16, .78); backdrop-filter: grayscale(.8) blur(1px);
+}
+.cook-ui .ck-down-card { text-align: center; max-width: 360px; }
+.cook-ui .ck-down-title { font-size: 34px; font-weight: 900; letter-spacing: -.02em; color: var(--ck-mustard); line-height: 1.05; }
+.cook-ui .ck-down-sub { margin-top: 8px; font-size: 14px; font-weight: 600; color: var(--ck-cream-2); }
+.cook-ui .ck-down-count { margin-top: 4px; font-size: 64px; font-weight: 900; line-height: 1; color: var(--ck-cream); font-variant-numeric: tabular-nums; }
+.cook-ui .ck-down-note { margin-top: 10px; font-size: 12px; font-weight: 600; color: var(--ck-cream-3); }
+
+/* confirm */
+.cook-ui .ck-confirm { position: absolute; inset: 0; display: grid; place-items: center; padding: 16px; background: rgba(12,14,16,.6); }
+.cook-ui .ck-confirm-card { width: min(340px, 100%); padding: 18px; border-radius: 12px; background: var(--ck-char); box-shadow: 0 14px 40px rgba(0,0,0,.5), inset 0 0 0 2px var(--ck-rust); }
+.cook-ui .ck-confirm-title { font-size: 22px; font-weight: 900; }
+.cook-ui .ck-confirm-sub { margin-top: 4px; font-size: 13px; color: var(--ck-cream-2); }
+.cook-ui .ck-confirm-row { display: flex; gap: 8px; margin-top: 14px; }
+.cook-ui .ck-btn { flex: 1; height: 40px; border-radius: 8px; font-weight: 900; font-size: 14px; }
+.cook-ui .ck-btn-ghost { box-shadow: inset 0 0 0 2px var(--ck-char-4); }
+.cook-ui .ck-btn-danger { background: var(--ck-rust); box-shadow: inset 0 -3px 0 rgba(0,0,0,.2); }
+
+/* ── right: gauges, toggles, haul, callouts ──────────────────────────────── */
+.cook-ui .ck-right {
+  display: flex; flex-direction: column; gap: var(--ck-gap); min-height: 0; overflow-y: auto;
+  scrollbar-width: none;
+}
+.cook-ui .ck-right::-webkit-scrollbar { display: none; }
+.cook-ui .ck-sec { padding: 11px 12px; border-radius: var(--ck-radius); background: var(--ck-char); flex: none; }
+.cook-ui .ck-gauge + .ck-gauge { margin-top: 10px; }
+.cook-ui .ck-g-top { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 800; }
+.cook-ui .ck-g-top .ck-ico { width: 18px; height: 18px; color: var(--ck-cream-3); }
+.cook-ui .ck-g-top span { flex: 1 1 auto; }
+.cook-ui .ck-g-top b { font-size: 15px; font-weight: 900; font-variant-numeric: tabular-nums; }
+.cook-ui .ck-g-bar { position: relative; height: 10px; margin-top: 6px; border-radius: 5px; background: var(--ck-ink); overflow: hidden; }
+.cook-ui .ck-g-bar em { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 5px; background: var(--ck-teal); transition: width .15s linear, background-color .2s; }
+.cook-ui .ck-g-bar u { position: absolute; top: 0; bottom: 0; background: rgba(143,179,106,.35); }
+.cook-ui .ck-g-bar .ck-g-mark { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--ck-rust-2); }
+.cook-ui .ck-g-temp .ck-g-bar em { background: var(--ck-cream-2); width: 4%; }
+.cook-ui [data-tone="warn"] .ck-g-bar em, .cook-ui .ck-g-bar[data-tone="warn"] em { background: var(--ck-mustard); }
+.cook-ui [data-tone="bad"] .ck-g-bar em { background: var(--ck-rust-2); }
+.cook-ui .ck-g-temp[data-tone="good"] .ck-g-bar em { background: var(--ck-good); }
+.cook-ui .ck-g-temp[data-tone="warn"] .ck-g-bar em { background: var(--ck-mustard); }
+.cook-ui .ck-g-fumes[data-tone="warn"] .ck-g-top .ck-ico { color: var(--ck-mustard); }
+.cook-ui .ck-g-fumes[data-tone="bad"] .ck-g-top .ck-ico,
+.cook-ui .ck-g-fire[data-tone="warn"] .ck-g-top .ck-ico,
+.cook-ui .ck-g-fire[data-tone="bad"] .ck-g-top .ck-ico { color: var(--ck-rust-2); }
+.cook-ui .ck-g-fumes[data-tone="bad"] b, .cook-ui .ck-g-fire[data-tone="bad"] b, .cook-ui .ck-g-fire[data-tone="warn"] b { color: #ef8f74; }
+.cook-ui .ck-g-fumes[data-tone="bad"] .ck-g-top .ck-ico { animation: ck-blink .6s steps(1, end) infinite; }
+.cook-ui .ck-g-fire .ck-g-bar em { background: linear-gradient(90deg, var(--ck-mustard), var(--ck-rust-2)); }
+@keyframes ck-blink { 50% { opacity: .25; } }
+
+.cook-ui .ck-toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cook-ui .ck-toggle {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  min-height: 74px; padding: 8px 4px; border-radius: 9px; background: var(--ck-char-3);
+  box-shadow: inset 0 -4px 0 rgba(0,0,0,.25); transition: background-color .15s, transform .08s;
+}
+.cook-ui .ck-toggle .ck-ico { width: 26px; height: 26px; color: var(--ck-cream-3); }
+.cook-ui .ck-toggle b { font-size: 14px; font-weight: 900; letter-spacing: .03em; }
+.cook-ui .ck-toggle span { font-size: 11px; font-weight: 700; color: var(--ck-cream-3); }
+.cook-ui .ck-toggle:hover { background: var(--ck-char-4); }
+.cook-ui .ck-toggle:active { transform: translateY(2px); box-shadow: inset 0 -2px 0 rgba(0,0,0,.25); }
+.cook-ui .ck-toggle.is-on { background: var(--ck-teal); }
+.cook-ui .ck-toggle.is-on .ck-ico, .cook-ui .ck-toggle.is-on span { color: var(--ck-cream); }
+.cook-ui .ck-vent.is-on { background: #6f6a3e; }
+.cook-ui .ck-curtains.is-on { background: var(--ck-rust); }
+.cook-ui .ck-curtains.is-alarm { animation: ck-alarm-btn .5s steps(1, end) infinite; }
+@keyframes ck-alarm-btn { 0% { background: var(--ck-char-3); box-shadow: inset 0 0 0 3px var(--ck-rust-2); } 50% { background: var(--ck-rust); box-shadow: inset 0 0 0 3px var(--ck-mustard); } }
+.cook-ui .ck-ext {
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 44px; margin-top: 8px; padding: 0 12px;
+  border-radius: 9px; background: var(--ck-char-3); box-shadow: inset 0 -4px 0 rgba(0,0,0,.25);
+}
+.cook-ui .ck-ext .ck-ico { width: 22px; height: 22px; color: #d0654a; }
+.cook-ui .ck-ext b { flex: 1 1 auto; text-align: left; font-size: 14px; font-weight: 900; }
+.cook-ui .ck-pips { display: flex; gap: 4px; }
+.cook-ui .ck-pips i { width: 10px; height: 16px; border-radius: 3px; background: var(--ck-ink); }
+.cook-ui .ck-pips i.is-full { background: #d0654a; }
+.cook-ui .ck-ext.is-urgent { background: var(--ck-rust); animation: ck-urgent .7s ease-in-out infinite; }
+.cook-ui .ck-ext.is-urgent .ck-ico { color: var(--ck-cream); }
+.cook-ui .ck-ext.is-urgent .ck-pips i.is-full { background: var(--ck-cream); }
+.cook-ui .ck-ext.is-empty { opacity: .55; }
+@keyframes ck-urgent { 50% { box-shadow: inset 0 -4px 0 rgba(0,0,0,.25), 0 0 0 3px rgba(217,168,58,.6); } }
+
+.cook-ui .ck-haul-top { display: flex; align-items: center; gap: 9px; }
+.cook-ui .ck-haul-top > .ck-ico { width: 30px; height: 30px; color: #7fd6c2; }
+.cook-ui .ck-haul-top div { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.cook-ui .ck-units { font-size: 22px; font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; }
+.cook-ui .ck-units-sub { font-size: 11px; font-weight: 700; color: var(--ck-cream-3); margin-top: 2px; }
+.cook-ui .ck-avgq { font-style: normal; font-size: 12px; font-weight: 800; color: var(--ck-cream-2); text-align: right; max-width: 70px; line-height: 1.15; }
+.cook-ui .ck-units-bar em { background: #7fd6c2; }
+.cook-ui .ck-units-bar[data-tone="good"] em { background: var(--ck-good); }
+.cook-ui .ck-gadgets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
+.cook-ui .ck-gadget {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 7px 2px 6px;
+  border-radius: 8px; background: var(--ck-char-2); color: var(--ck-cream-3);
+}
+.cook-ui .ck-gadget .ck-ico { width: 20px; height: 20px; }
+.cook-ui .ck-gadget span { font-size: 11px; font-weight: 700; }
+.cook-ui .ck-gadget b { font-size: 17px; font-weight: 900; line-height: 1.05; }
+.cook-ui .ck-gadget kbd { position: absolute; top: 4px; right: 4px; font-size: 9px; line-height: 1.5; padding: 0 3px; min-width: 0; }
+.cook-ui .ck-gadget.is-ready { background: #3a3a2c; color: var(--ck-cream); box-shadow: inset 0 0 0 2px rgba(217,168,58,.55); }
+.cook-ui .ck-gadget.is-ready .ck-ico { color: var(--ck-mustard); }
+
+.cook-ui .ck-call-list { display: flex; flex-wrap: wrap; gap: 5px; }
+.cook-ui .ck-call {
+  display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 10px 0 8px; border-radius: 15px;
+  background: var(--ck-char-3); font-size: 12px; font-weight: 800; white-space: nowrap;
+  transition: background-color .12s;
+}
+.cook-ui .ck-call .ck-ico { width: 14px; height: 14px; color: var(--ck-mustard); }
+.cook-ui .ck-call:hover { background: var(--ck-char-4); }
+.cook-ui .ck-call.is-sent { animation: ck-sent .5s ease-out; }
+@keyframes ck-sent { 0% { background: var(--ck-mustard); color: var(--ck-char); } 100% { background: var(--ck-char-3); } }
+.cook-ui .ck-hp .ck-g-bar em { background: var(--ck-good); }
+.cook-ui .ck-hp[data-tone="warn"] .ck-g-bar em { background: var(--ck-mustard); }
+.cook-ui .ck-hp[data-tone="bad"] .ck-g-bar em { background: var(--ck-rust-2); }
+
+.cook-ui.ck-locked .ck-right .ck-toggle, .cook-ui.ck-locked .ck-ext, .cook-ui.ck-locked .ck-cook, .cook-ui.ck-locked .ck-tb { opacity: .45; pointer-events: none; }
+
+/* ── responsive full mode ────────────────────────────────────────────────── */
+.cook-ui.ck-short .ck-card-desc { display: none; }
+.cook-ui.ck-short .ck-head { min-height: 48px; padding-top: 6px; padding-bottom: 6px; }
+.cook-ui.ck-short .ck-batch-name { font-size: 19px; }
+.cook-ui.ck-short .ck-toggle { min-height: 60px; }
+.cook-ui.ck-short .ck-sec { padding: 9px 10px; }
+.cook-ui.ck-short .ck-gauge + .ck-gauge { margin-top: 7px; }
+
+/* narrow: recipe book becomes a drawer over the stage */
+.cook-ui.ck-narrow .ck-shell {
+  grid-template-columns: minmax(0, 1fr) minmax(200px, 230px);
+  grid-template-areas: "head head" "stage right";
+}
+.cook-ui.ck-narrow .ck-book-toggle { display: flex; }
+.cook-ui.ck-narrow .ck-left {
+  position: absolute; z-index: 5; left: var(--ck-gap); top: 76px; bottom: var(--ck-gap); width: min(320px, calc(100% - 2 * var(--ck-gap)));
+  transform: translateX(calc(-100% - 20px)); transition: transform .2s ease-out;
+  filter: drop-shadow(0 12px 30px rgba(0,0,0,.55));
+}
+.cook-ui.ck-narrow.ck-short .ck-left { top: 66px; }
+.cook-ui.ck-narrow.ck-drawer-open .ck-left { transform: none; }
+.cook-ui.ck-narrow.ck-short .ck-pantry { display: none; }
+.cook-ui.ck-narrow .ck-dots .ck-dot { width: 28px; height: 28px; }
+.cook-ui.ck-narrow .ck-abort span { display: none; }
+.cook-ui.ck-narrow .ck-abort { width: 36px; padding: 0; justify-content: center; }
+.cook-ui.ck-narrow .ck-call-list .ck-call span { font-size: 11px; }
+
+/* ── compact mode (solo docked panel ~520×400) ───────────────────────────── */
+.cook-ui.ck-compact { font-size: 12px; border-radius: 12px; }
+.cook-ui.ck-compact .ck-shell {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "tool" "stage";
+  gap: 6px; padding: 6px;
+}
+.cook-ui.ck-compact .ck-head, .cook-ui.ck-compact .ck-left, .cook-ui.ck-compact .ck-right { display: none; }
+.cook-ui.ck-compact .ck-toolbar {
+  grid-area: tool; display: flex; align-items: center; gap: 5px; min-width: 0;
+  height: 40px; padding: 4px; border-radius: 9px; background: var(--ck-char);
+}
+.cook-ui.ck-compact .ck-stage { border-radius: 9px; }
+.cook-ui .ck-menu-btn {
+  flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 8px 0 10px;
+  border-radius: 7px; background: var(--ck-char-3); text-align: left;
+}
+.cook-ui .ck-menu-label { flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 900; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cook-ui .ck-menu-sub { flex: none; font-size: 11px; font-weight: 800; color: var(--ck-mustard); }
+.cook-ui .ck-menu-btn .ck-ico { width: 16px; height: 16px; color: var(--ck-cream-3); transition: transform .15s; }
+.cook-ui .ck-menu-btn.is-open { background: var(--ck-teal); }
+.cook-ui .ck-menu-btn.is-open .ck-ico { transform: rotate(180deg); color: var(--ck-cream); }
+.cook-ui .ck-tb {
+  position: relative; flex: none; display: grid; place-items: center; width: 34px; height: 32px; border-radius: 7px;
+  background: var(--ck-char-3); color: var(--ck-cream-3);
+}
+.cook-ui .ck-tb .ck-ico { width: 20px; height: 20px; }
+.cook-ui .ck-tb.is-on { background: var(--ck-teal); color: var(--ck-cream); }
+.cook-ui .ck-tb-vent.is-on { background: #6f6a3e; }
+.cook-ui .ck-tb-vent.is-smoke::after { content: ""; position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: var(--ck-mustard); }
+.cook-ui .ck-tb-curtains.is-on { background: var(--ck-rust); }
+.cook-ui .ck-tb-curtains.is-alarm { animation: ck-alarm-btn .5s steps(1, end) infinite; color: var(--ck-cream); }
+.cook-ui .ck-tb-ext { color: #d0654a; width: 42px; grid-template-columns: auto auto; gap: 1px; }
+.cook-ui .ck-tb-ext .ck-ico { width: 18px; height: 18px; }
+.cook-ui .ck-tb-count { font-size: 12px; font-weight: 900; color: var(--ck-cream); }
+.cook-ui .ck-tb-ext.is-urgent { background: var(--ck-rust); color: var(--ck-cream); animation: ck-urgent .7s ease-in-out infinite; }
+.cook-ui .ck-tb-ext.is-empty { opacity: .5; }
+.cook-ui .ck-tb-bars { flex: 0 1 92px; min-width: 56px; display: flex; flex-direction: column; gap: 4px; }
+.cook-ui .ck-tb-bar { display: flex; align-items: center; gap: 3px; }
+.cook-ui .ck-tb-bar i { display: block; color: var(--ck-cream-3); }
+.cook-ui .ck-tb-bar .ck-ico { width: 12px; height: 12px; }
+.cook-ui .ck-tb-bar span { position: relative; flex: 1 1 auto; height: 7px; border-radius: 4px; background: var(--ck-ink); overflow: hidden; }
+.cook-ui .ck-tb-bar em { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--ck-teal); border-radius: 4px; transition: width .15s linear; }
+.cook-ui .ck-tb-bar[data-tone="warn"] em { background: var(--ck-mustard); }
+.cook-ui .ck-tb-bar[data-tone="bad"] em { background: var(--ck-rust-2); }
+.cook-ui .ck-tb-bar[data-tone="bad"] i { color: var(--ck-rust-2); }
+.cook-ui .ck-tb-fire em { background: var(--ck-rust-2); }
+.cook-ui .ck-tb-units { flex: none; display: flex; align-items: center; gap: 2px; padding: 0 4px 0 2px; }
+.cook-ui .ck-tb-units .ck-ico { width: 18px; height: 18px; color: #7fd6c2; }
+.cook-ui .ck-tb-units b { font-size: 12px; font-weight: 900; font-variant-numeric: tabular-nums; }
+
+.cook-ui .ck-menu {
+  position: absolute; inset: 0; z-index: 6; padding: 6px; background: rgba(12,14,16,.45);
+}
+.cook-ui .ck-menu-list {
+  max-height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 8px; border-radius: 9px;
+  background: var(--ck-char); box-shadow: 0 12px 30px rgba(0,0,0,.5);
+  scrollbar-width: thin; scrollbar-color: var(--ck-char-4) transparent;
+}
+.cook-ui .ck-menu-note { padding: 6px 4px 10px; font-size: 12px; font-weight: 700; color: var(--ck-mustard); }
+.cook-ui .ck-menu .ck-group + .ck-group { margin-top: 8px; }
+.cook-ui .ck-menu .ck-h { margin-bottom: 5px; font-size: 11px; }
+.cook-ui .ck-card.is-compact { padding: 7px 7px 7px 11px; margin-bottom: 5px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; align-items: center; }
+.cook-ui .ck-card.is-compact .ck-card-top { grid-column: 1; }
+.cook-ui .ck-card.is-compact .ck-card-mid { display: none; }
+.cook-ui .ck-card.is-compact .ck-card-foot { display: contents; }
+.cook-ui .ck-card.is-compact .ck-needs { grid-column: 1; }
+.cook-ui .ck-card.is-compact .ck-cook { grid-column: 2; grid-row: 1 / span 2; height: 34px; }
+.cook-ui .ck-card.is-compact .ck-card-name { font-size: 13px; }
+.cook-ui .ck-card.is-compact .ck-need { height: 20px; font-size: 11px; }
+.cook-ui .ck-card.is-compact .ck-need .ck-ico { width: 15px; height: 15px; }
+.cook-ui .ck-menu-abort {
+  display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; height: 34px; margin-bottom: 8px;
+  border-radius: 7px; font-size: 13px; font-weight: 900; color: #ef8f74; box-shadow: inset 0 0 0 2px var(--ck-rust);
+}
+.cook-ui .ck-menu-abort .ck-ico { width: 16px; height: 16px; }
+.cook-ui .ck-menu-abort:hover { background: rgba(156,74,50,.2); }
+
+.cook-ui.ck-compact .ck-alarm { top: auto; bottom: 30%; padding: 8px 12px; font-size: 14px; white-space: normal; }
+.cook-ui .ck-smoke-short { display: none; }
+.cook-ui.ck-compact .ck-smoke { right: 8px; bottom: 8px; font-size: 11px; padding: 4px 8px 4px 6px; gap: 4px; }
+.cook-ui.ck-compact .ck-smoke .ck-ico { width: 16px; height: 16px; }
+.cook-ui.ck-compact .ck-smoke-long { display: none; }
+.cook-ui.ck-compact .ck-smoke-short { display: inline; white-space: nowrap; }
+.cook-ui.ck-compact .ck-bump { font-size: 24px; }
+.cook-ui.ck-compact .ck-toasts { left: 8px; bottom: 8px; max-width: 62%; }
+.cook-ui.ck-compact .ck-toast { font-size: 11px; padding: 5px 8px; }
+.cook-ui.ck-compact .ck-result-card { padding: 12px 14px 10px; }
+.cook-ui.ck-compact .ck-result-title { font-size: 22px; }
+.cook-ui.ck-compact .ck-result-q b { font-size: 28px; }
+.cook-ui.ck-compact .ck-result-steps { display: none; }
+.cook-ui.ck-compact .ck-down-title { font-size: 24px; }
+.cook-ui.ck-compact .ck-down-count { font-size: 44px; }
+.cook-ui.ck-tiny .ck-tb-units { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cook-ui .ck-alarm, .cook-ui .ck-curtains.is-alarm, .cook-ui .ck-tb-curtains.is-alarm, .cook-ui .ck-ext.is-urgent, .cook-ui .ck-tb-ext.is-urgent { animation-duration: 1.4s; }
+  .cook-ui .ck-scene { transform: none !important; }
+}

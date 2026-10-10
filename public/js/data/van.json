@@ -1,0 +1,32 @@
+{
+  "_note": "3D mobile lab layout, in RV-local metres. Origin = RV model origin (ground centre). +Z = front of the RV, +Y up, +X = the driver's LEFT (the driver's right / door side is -X). Agents may tune numbers; never rename ids. Measured against assets/models/vehicles.js buildRV(): coach box z -4.28..2.0, body bottom y 0.6, roof 3.11, outer half-width 1.27, cab z 1.7..4.3 (windshield base z 3.32 y 1.38). walkable = allowed positions of Doc's CENTRE (already inset by his radius from counters/walls).",
+  "rv": { "length": 8.6, "width": 2.6, "floorY": 0.72, "ceilingY": 3.0, "wallInnerX": 1.19, "rearInnerZ": -4.12, "cabPartitionZ": 2.15, "cutHeight": 1.05, "counterDepth": 0.63 },
+  "walkable": [
+    { "id": "aisle",  "minX": -0.34, "maxX": 0.34, "minZ": -3.05, "maxZ": 1.85 },
+    { "id": "rear",   "minX": -0.95, "maxX": 0.95, "minZ": -3.31, "maxZ": -2.99 },
+    { "id": "rear_r", "minX": -0.18, "maxX": 0.95, "minZ": -3.88, "maxZ": -2.99 },
+    { "id": "door",   "minX": -0.95, "maxX": 0.0,  "minZ": -0.55, "maxZ": 0.35 }
+  ],
+  "counterHeight": 0.95,
+  "stations": [
+    { "id": "recipe",       "name": "Recipe Board",   "kind": "board",   "x": 0.0,   "z": 2.11, "side": 0,  "stand": { "x": 0.0,  "z": 1.62 }, "faces": "front" },
+    { "id": "pantry",       "name": "Pantry",         "kind": "shelf",   "x": 0.98,  "z": 1.45, "side": 1,  "stand": { "x": 0.3, "z": 1.45 } },
+    { "id": "grind",        "name": "Grinding Bench", "kind": "counter", "x": -0.875, "z": 1.45, "side": -1, "stand": { "x": -0.25, "z": 1.45 }, "steps": ["grind"] },
+    { "id": "measure",      "name": "Measuring Bench","kind": "counter", "x": 0.875, "z": 0.45, "side": 1,  "stand": { "x": 0.25, "z": 0.45 }, "steps": ["measure"] },
+    { "id": "curtains",     "name": "Curtain Cord",   "kind": "wall",    "x": -1.15, "z": 0.65, "side": -1, "stand": { "x": -0.3, "z": 0.65 } },
+    { "id": "stove",        "name": "Stove",          "kind": "counter", "x": 0.875, "z": -0.65, "side": 1, "stand": { "x": 0.25, "z": -0.65 }, "steps": ["heat", "stir"] },
+    { "id": "vent",         "name": "Vent Fan",       "kind": "wall",    "x": 1.15,  "z": -1.5, "side": 1,  "stand": { "x": 0.3, "z": -1.5 } },
+    { "id": "cool",         "name": "Ice Bath",       "kind": "counter", "x": -0.875, "z": -1.35, "side": -1, "stand": { "x": -0.25, "z": -1.35 }, "steps": ["cool"] },
+    { "id": "break",        "name": "Bagging Bench",  "kind": "counter", "x": 0.875, "z": -2.3, "side": 1,  "stand": { "x": 0.25, "z": -2.3 }, "steps": ["break"] },
+    { "id": "hammer",       "name": "Hull Patch",     "kind": "wall",    "x": -1.15, "z": -2.35, "side": -1, "stand": { "x": -0.3, "z": -2.35 }, "steps": ["hammer"] },
+    { "id": "extinguisher", "name": "Extinguisher",   "kind": "wall",    "x": 1.15,  "z": -3.55, "side": 1,  "stand": { "x": 0.6, "z": -3.55 } },
+    { "id": "stash",        "name": "Product Stash",  "kind": "crate",   "x": -0.8,  "z": -3.83, "side": -1, "stand": { "x": -0.35, "z": -3.3 } }
+  ],
+  "cab": { "driverSeat": { "x": 0.55, "z": 2.5 }, "passengerSeat": { "x": -0.55, "z": 2.5 }, "steeringWheel": { "x": 0.55, "z": 2.93, "y": 1.56 } },
+  "doc": { "radius": 0.24, "walkSpeed": 2.6, "accel": 14, "interactRadius": 0.75, "scale": 0.92 },
+  "sway": { "latAccStart": 2.5, "pushPerMps2": 0.08, "bumpHop": 0.35, "stumbleBump": 0.6, "stumbleSeconds": 0.7, "gripWhileWorking": 0.7 },
+  "camera": {
+    "dollhouse": { "pos": { "x": -6.0, "y": 9.2, "z": -0.7 }, "target": { "x": 0.25, "y": 0.4, "z": -2.8 }, "fov": 50 },
+    "zoomLevels": [0.7, 0.85, 1.0, 1.3]
+  }
+}

@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cook &amp; Run — view test</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/hud.css">
+<style>
+  html, body { margin: 0; height: 100%; background: #22262a; overflow: hidden; }
+  #stage { position: fixed; inset: 0; }
+  #view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #dbg { position: fixed; left: 50%; bottom: 0; transform: translateX(-50%); z-index: 20; display: flex; gap: 4px; flex-wrap: wrap; justify-content: center;
+         font: 600 11px/1 system-ui, sans-serif; color: #f1ead8; padding: 4px 6px; background: rgba(34,38,42,.6); border-radius: 6px 6px 0 0; }
+  #dbg a { color: #d9a83a; text-decoration: none; padding: 3px 5px; border-radius: 4px; background: rgba(0,0,0,.25); }
+  #dbg a.on { background: #d9a83a; color: #22262a; }
+  #dbg span { padding: 3px 4px; opacity: .8; font-variant-numeric: tabular-nums; }
+  body.shot #dbg { display: none; }
+  #cookpanel { position: absolute; left: 0; right: 0; bottom: 0; height: 42%; background: linear-gradient(180deg, #3b3631, #2a2622); border-top: 3px solid #4f8f8a;
+               display: none; align-items: center; justify-content: center; color: rgba(241,234,216,.5); font: 700 18px/1.2 system-ui, sans-serif; letter-spacing: .1em; }
+  body.cook #cookpanel { display: flex; }
+  body.cook #view { height: 58%; }
+  body.cook #hudroot { height: 58%; }
+  #hudroot { position: absolute; left: 0; top: 0; right: 0; height: 100%; pointer-events: none; }
+</style>
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+</head>
+<body>
+<div id="stage">
+  <canvas id="view"></canvas>
+  <div id="hudroot"></div>
+  <div id="cookpanel">COOK PANEL (CookUI goes here)</div>
+</div>
+<div id="dbg"></div>
+<script type="module">
+import { loadData } from './js/data/loadData.js';
+import { WorldView } from './js/render/WorldView.js';
+import { createAudio } from './js/render/audio.js';
+import { Hud } from './js/ui/hud.js';
+import { FakeSnapshots, PRESETS } from './js/render/fakeSnapshots.js';
+
+const q = new URLSearchParams(location.search);
+const preset = q.get('z') || '300';
+const role = q.get('role') === 'cook' ? 'cook' : 'driver';
+const seed = q.has('seed') ? +q.get('seed') : undefined;
+if (role === 'cook') document.body.classList.add('cook');
+if (q.has('shot')) document.body.classList.add('shot');
+
+const data = await loadData();
+const canvas = document.getElementById('view');
+const audio = createAudio();
+const view = new WorldView(canvas, data, { seed: seed ?? data.route.defaultSeed, role, audio });
+const hud = new Hud(document.getElementById('hudroot'), data, { role });
+const gen = new FakeSnapshots(data, { seed: seed ?? data.route.defaultSeed, preset, role, start: q.has('start') ? +q.get('start') : null, speed: q.has('speed') ? +q.get('speed') : null });
+if (q.get('cam')) view.setCamera(q.get('cam'));
+if (gen.P.cam && !q.get('cam')) {
+  const c = gen.P.cam, t = gen.track;
+  view.setCamera('cinematic');
+  const { Vector3 } = await import('three');
+  view.setCinematic({ pos: new Vector3(t.centerX(c.pos[2]) + c.pos[0], c.pos[1], c.pos[2]), target: new Vector3(t.centerX(c.target[2]) + c.target[0], c.target[1], c.target[2]), fov: c.fov, orbit: false });
+}
+if (q.has('free')) gen.free = true;
+if (q.get('hud')) gen.hud = q.get('hud');
+await view.ready;
+
+// debug bar
+const dbg = document.getElementById('dbg');
+const link = (k) => { const u = new URLSearchParams(q); u.set('z', k); return '?' + u.toString(); };
+dbg.innerHTML = Object.keys(PRESETS).map((k) => `<a href="${link(k)}" class="${k === preset ? 'on' : ''}" title="${PRESETS[k].label}">${k}</a>`).join('') +
+  `<a href="?${(() => { const u = new URLSearchParams(q); u.set('role', role === 'cook' ? 'driver' : 'cook'); return u; })()}">${role === 'cook' ? 'driver' : 'cook'}</a><span id="st"></span>`;
+const stEl = document.getElementById('st');
+
+let T = 0, last = performance.now(), lastSend = -1, ended = false, paused = false;
+const fixedDt = q.has('dt') ? +q.get('dt') : null;   // deterministic stepping for screenshots
+window.__view = view;
+window.__hud = hud;
+window.__gen = gen;
+window.__audio = audio;
+window.__state = { preset, role, get T() { return T; } };
+window.__pause = (p = true) => { paused = p; };
+window.__settled = () => view.isSettled();
+window.__stats = () => ({ ...view.stats, T: +T.toFixed(2), z: +(view.cur?.rv?.z ?? 0).toFixed(1), models: view.modelSource, real: [...(view.lib?.realKinds || [])].length });
+
+function step(dt, draw = true) {
+  T += dt;
+  const snap = gen.snapshot(T);
+  if (role === 'cook') {
+    // network-like: 15 Hz with interpolation
+    if (T - lastSend >= 1 / 15) { lastSend = T; view.pushSnapshot(snap, { interpolate: true }); hud.update(snap); }
+  } else {
+    view.pushSnapshot(snap, { interpolate: false });
+    hud.update(snap);
+  }
+  view.render(dt, { draw });
+}
+// advance the script without drawing (fast), then draw one frame
+window.__advance = (sec, dt = 1 / 30) => { const n = Math.max(1, Math.round(sec / dt)); for (let i = 0; i < n; i++) step(dt, i === n - 1); };
+window.__goto = (t, dt = 1 / 30) => { if (t > T) window.__advance(t - T, dt); };
+function frame(now) {
+  const dt = fixedDt ?? Math.min(0.1, (now - last) / 1000);
+  last = now;
+  if (!paused) step(dt);
+  if (stEl && Math.floor(now / 250) !== Math.floor((now - dt * 1000) / 250)) {
+    const s = view.stats;
+    stEl.textContent = `z ${(view.cur?.rv?.z ?? 0).toFixed(0)} · calls ${s.calls} · tris ${(s.triangles / 1000).toFixed(0)}k · chunks ${s.chunks} · ents ${s.ents} · fx ${s.particles}`;
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+addEventListener('resize', () => view.resize());
+addEventListener('keydown', (e) => {
+  if (e.code === 'KeyM') audio.setMuted(!audio.muted);
+  if (e.code === 'KeyC') { const m = ['chase', 'rear', 'cinematic']; view.setCamera(m[(m.indexOf(view.cameraMode) + 1) % 3]); }
+  if (e.code === 'KeyH') audio.horn(true);
+  if (e.code === 'KeyP') paused = !paused;
+  if (e.code === 'KeyF') gen.free = !gen.free;
+  if (e.code === 'KeyX' && !ended) {
+    ended = true;
+    hud.showEnd({ won: preset === '6900', reason: preset === '6900' ? 'won' : 'busted', units: 7, quality: 0.86, payout: 10920, points: 6420, chaos: 14, knocked: 5, copsWrecked: 3, timeSec: 401, stars: 2 },
+      { onRestart: () => { hud.hideEnd(); ended = false; }, onMenu: () => { hud.hideEnd(); ended = false; } });
+  }
+});
+addEventListener('keyup', (e) => { if (e.code === 'KeyH') audio.horn(false); });
+if (q.has('end')) {
+  const won = q.get('end') === 'win';
+  hud.showEnd({ won, reason: won ? 'won' : 'busted', units: won ? 7 : 3, quality: 0.86, payout: won ? 10920 : 0, points: 6420, chaos: 14, knocked: 5, copsWrecked: 3, timeSec: 401, stars: won ? 2 : 0 }, { onRestart() {}, onMenu() {} });
+}
+if (q.has('toast')) { hud.toast('+2 Mesa Salts  +1 Canyon Solvent', 'good'); hud.toast('★★★ HEAT RISING', 'heat'); }
+</script>
+</body>
+</html>

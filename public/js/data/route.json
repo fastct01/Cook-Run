@@ -1,0 +1,1177 @@
+{
+ "_note": "40 km route for the 40-minute version. z = metres along the road from Rook's Garage. See EXPANSION_CONTRACT.md.",
+ "routeLength": 40000,
+ "defaultSeed": 1337,
+ "start": {
+  "z": 45,
+  "lane": 1,
+  "garage": true
+ },
+ "biomeBlend": 120,
+ "timeOfDay": [
+  [
+   0,
+   6.6
+  ],
+  [
+   3000,
+   7.6
+  ],
+  [
+   8000,
+   10
+  ],
+  [
+   14000,
+   12.4
+  ],
+  [
+   19000,
+   13.8
+  ],
+  [
+   26000,
+   15.4
+  ],
+  [
+   29000,
+   16.2
+  ],
+  [
+   32000,
+   17
+  ],
+  [
+   35000,
+   18
+  ],
+  [
+   38000,
+   19.1
+  ],
+  [
+   40000,
+   19.8
+  ]
+ ],
+ "biomes": [
+  {
+   "id": "ironworks",
+   "name": "Ironworks District",
+   "from": 0,
+   "to": 3000,
+   "lanes": 2,
+   "laneWidth": 3.5,
+   "shoulder": 2.6,
+   "sidewalk": true,
+   "curveAmp": 6,
+   "curveWave": 600,
+   "trafficPer100m": 1.4,
+   "pedPer100m": 0.8,
+   "obstaclePer100m": 1.1,
+   "traffic": [
+    "truck",
+    "pickup",
+    "van",
+    "garbage_truck"
+   ],
+   "obstacles": [
+    "cone",
+    "barrier",
+    "pothole",
+    "trashcan",
+    "steam_leak",
+    "manhole_open",
+    "trench_plates"
+   ],
+   "scenery": [
+    "factory",
+    "warehouse",
+    "rail_shed",
+    "water_tower_city",
+    "chainlink_fence",
+    "streetlight",
+    "overhead_crane"
+   ],
+   "colors": {
+    "ground": "#7f7b74",
+    "roadside": "#a39b8f",
+    "road": "#3b3c3f",
+    "line": "#e9d47c",
+    "sky": "#c9b8a0",
+    "fog": "#c8baa6",
+    "sun": "#ffd9a8"
+   },
+   "fogNear": 70,
+   "fogFar": 280,
+   "sideRoom": 16,
+   "road": {
+    "type": "city",
+    "cracks": 0.6
+   },
+   "intersectionEvery": 320,
+   "terrain": []
+  },
+  {
+   "id": "downtown",
+   "name": "Downtown",
+   "from": 3000,
+   "to": 8000,
+   "lanes": 4,
+   "laneWidth": 3.4,
+   "shoulder": 3,
+   "sidewalk": true,
+   "curveAmp": 4,
+   "curveWave": 600,
+   "trafficPer100m": 2.6,
+   "pedPer100m": 3.2,
+   "obstaclePer100m": 1,
+   "traffic": [
+    "sedan",
+    "hatch",
+    "bus",
+    "pickup",
+    "van",
+    "garbage_truck",
+    "news_van"
+   ],
+   "obstacles": [
+    "cone",
+    "trashcan",
+    "hydrant",
+    "pothole",
+    "steam_leak",
+    "water_main",
+    "trench_plates",
+    "manhole_open"
+   ],
+   "scenery": [
+    "building",
+    "skyscraper",
+    "cinema",
+    "police_station",
+    "hotel",
+    "fire_station",
+    "streetlight",
+    "trafficlight",
+    "tree_city",
+    "bench"
+   ],
+   "colors": {
+    "ground": "#8a8c90",
+    "roadside": "#b3ada3",
+    "road": "#3d3f44",
+    "line": "#e9d47c",
+    "sky": "#a7c7d6",
+    "fog": "#bccbd1",
+    "sun": "#fff3dc"
+   },
+   "fogNear": 80,
+   "fogFar": 300,
+   "sideRoom": 14,
+   "road": {
+    "type": "city"
+   },
+   "intersectionEvery": 200,
+   "terrain": []
+  },
+  {
+   "id": "oldtown",
+   "name": "Old Town",
+   "from": 8000,
+   "to": 11000,
+   "lanes": 2,
+   "laneWidth": 3.4,
+   "shoulder": 2.6,
+   "sidewalk": true,
+   "curveAmp": 8,
+   "curveWave": 600,
+   "trafficPer100m": 1.1,
+   "pedPer100m": 3.5,
+   "obstaclePer100m": 0.9,
+   "traffic": [
+    "sedan",
+    "hatch",
+    "van"
+   ],
+   "obstacles": [
+    "cone",
+    "trashcan",
+    "steam_leak",
+    "manhole_open",
+    "pothole"
+   ],
+   "scenery": [
+    "loft",
+    "market_stall",
+    "clock_tower",
+    "diner",
+    "streetcar_stop",
+    "bunting",
+    "streetlight",
+    "tree_city",
+    "bench"
+   ],
+   "colors": {
+    "ground": "#8d857a",
+    "roadside": "#bfae94",
+    "road": "#55504b",
+    "line": "#efe2b8",
+    "sky": "#a9cbe0",
+    "fog": "#c4d2d8",
+    "sun": "#fff1d4"
+   },
+   "fogNear": 80,
+   "fogFar": 300,
+   "sideRoom": 12,
+   "road": {
+    "type": "cobble",
+    "tramTracks": true
+   },
+   "intersectionEvery": 240,
+   "terrain": [],
+   "streetcarPer100m": 0.12
+  },
+  {
+   "id": "docks",
+   "name": "Harbour Docks",
+   "from": 11000,
+   "to": 14000,
+   "lanes": 2,
+   "laneWidth": 3.6,
+   "shoulder": 2.8,
+   "sidewalk": true,
+   "curveAmp": 8,
+   "curveWave": 600,
+   "trafficPer100m": 1.2,
+   "pedPer100m": 0.8,
+   "obstaclePer100m": 1,
+   "traffic": [
+    "truck",
+    "forklift",
+    "pickup",
+    "van"
+   ],
+   "obstacles": [
+    "cone",
+    "barrier",
+    "pothole",
+    "steam_leak",
+    "trench_plates"
+   ],
+   "scenery": [
+    "dock_warehouse",
+    "container_stack",
+    "gantry_crane",
+    "bollard_crates",
+    "chainlink_fence",
+    "streetlight",
+    "lighthouse",
+    "fishing_boat",
+    "cargo_ship"
+   ],
+   "colors": {
+    "ground": "#7d8286",
+    "roadside": "#a8a59c",
+    "road": "#3f4245",
+    "line": "#e9d47c",
+    "sky": "#9fc6dd",
+    "fog": "#b9cdd6",
+    "sun": "#fff6e6"
+   },
+   "fogNear": 90,
+   "fogFar": 340,
+   "sideRoom": 18,
+   "road": {
+    "type": "city"
+   },
+   "water": -1,
+   "terrain": []
+  },
+  {
+   "id": "suburbs",
+   "name": "Maple Heights",
+   "from": 14000,
+   "to": 19000,
+   "lanes": 2,
+   "laneWidth": 3.6,
+   "shoulder": 2.6,
+   "sidewalk": true,
+   "curveAmp": 16,
+   "curveWave": 600,
+   "trafficPer100m": 1.6,
+   "pedPer100m": 2,
+   "obstaclePer100m": 1.1,
+   "traffic": [
+    "sedan",
+    "hatch",
+    "pickup",
+    "van"
+   ],
+   "obstacles": [
+    "mailbox",
+    "trashcan",
+    "cone",
+    "pothole",
+    "sprinkler",
+    "speed_bump",
+    "sinkhole",
+    "water_main"
+   ],
+   "scenery": [
+    "house",
+    "house_2storey",
+    "church",
+    "shop_row",
+    "tree_round",
+    "fence",
+    "mailbox_deco",
+    "streetlight"
+   ],
+   "colors": {
+    "ground": "#7fa063",
+    "roadside": "#c9c2ad",
+    "road": "#45474b",
+    "line": "#ece9df",
+    "sky": "#9fd0e8",
+    "fog": "#c5dbe2",
+    "sun": "#fff6e0"
+   },
+   "fogNear": 90,
+   "fogFar": 340,
+   "sideRoom": 16,
+   "road": {
+    "type": "city"
+   },
+   "intersectionEvery": 260,
+   "yards": true,
+   "terrain": []
+  },
+  {
+   "id": "interstate",
+   "name": "Interstate 9",
+   "from": 19000,
+   "to": 26000,
+   "lanes": 6,
+   "laneWidth": 3.7,
+   "shoulder": 3,
+   "sidewalk": false,
+   "curveAmp": 14,
+   "curveWave": 600,
+   "trafficPer100m": 2.2,
+   "pedPer100m": 0,
+   "obstaclePer100m": 0.7,
+   "traffic": [
+    "sedan",
+    "pickup",
+    "truck",
+    "car_carrier",
+    "van",
+    "bus"
+   ],
+   "obstacles": [
+    "cone",
+    "barrier",
+    "broken_car",
+    "pothole"
+   ],
+   "scenery": [
+    "sound_wall",
+    "gantry_sign",
+    "billboard",
+    "powerpole",
+    "jersey_barrier"
+   ],
+   "colors": {
+    "ground": "#9a9a6e",
+    "roadside": "#b9b298",
+    "road": "#3b3d40",
+    "line": "#f2f2ea",
+    "sky": "#a2cbe2",
+    "fog": "#cbd8d6",
+    "sun": "#fff4dc"
+   },
+   "fogNear": 120,
+   "fogFar": 460,
+   "sideRoom": 30,
+   "road": {
+    "type": "freeway",
+    "median": true
+   },
+   "terrain": [
+    "terrain_hills"
+   ]
+  },
+  {
+   "id": "stripmall",
+   "name": "Strip-mall Outskirts",
+   "from": 26000,
+   "to": 29000,
+   "lanes": 4,
+   "laneWidth": 3.5,
+   "shoulder": 2.8,
+   "sidewalk": true,
+   "curveAmp": 10,
+   "curveWave": 600,
+   "trafficPer100m": 1.8,
+   "pedPer100m": 1,
+   "obstaclePer100m": 1,
+   "traffic": [
+    "sedan",
+    "hatch",
+    "pickup",
+    "van"
+   ],
+   "obstacles": [
+    "trolley",
+    "cone",
+    "trashcan",
+    "pothole",
+    "speed_bump"
+   ],
+   "scenery": [
+    "motel_2storey",
+    "drive_thru",
+    "donut_shop",
+    "minigolf_dino",
+    "tube_man",
+    "billboard",
+    "streetlight",
+    "shop_row"
+   ],
+   "colors": {
+    "ground": "#a39f88",
+    "roadside": "#cfc6ad",
+    "road": "#45474b",
+    "line": "#ece9df",
+    "sky": "#a6cfe4",
+    "fog": "#d2d9cf",
+    "sun": "#fff2d6"
+   },
+   "fogNear": 100,
+   "fogFar": 380,
+   "sideRoom": 24,
+   "road": {
+    "type": "city"
+   },
+   "intersectionEvery": 300,
+   "terrain": []
+  },
+  {
+   "id": "farmland",
+   "name": "Farmland",
+   "from": 29000,
+   "to": 32000,
+   "lanes": 2,
+   "laneWidth": 3.5,
+   "shoulder": 2,
+   "sidewalk": false,
+   "curveAmp": 24,
+   "curveWave": 600,
+   "trafficPer100m": 1,
+   "pedPer100m": 0.3,
+   "obstaclePer100m": 1.1,
+   "traffic": [
+    "tractor",
+    "pickup",
+    "truck",
+    "combine"
+   ],
+   "obstacles": [
+    "hay",
+    "cow",
+    "sheep",
+    "pothole",
+    "power_line_down",
+    "rock_small"
+   ],
+   "scenery": [
+    "barn",
+    "silo",
+    "farmhouse",
+    "grain_elevator",
+    "greenhouse",
+    "scarecrow",
+    "crop_rows",
+    "pumpkin_patch",
+    "irrigation_pivot",
+    "windmill",
+    "fence_wood",
+    "powerpole"
+   ],
+   "colors": {
+    "ground": "#b5a76a",
+    "roadside": "#c8b98a",
+    "road": "#4b4a48",
+    "line": "#e9d47c",
+    "sky": "#a9d3e6",
+    "fog": "#d4dccf",
+    "sun": "#ffefc8"
+   },
+   "fogNear": 110,
+   "fogFar": 400,
+   "sideRoom": 30,
+   "road": {
+    "type": "rural"
+   },
+   "terrain": [
+    "terrain_field"
+   ]
+  },
+  {
+   "id": "foothills",
+   "name": "Pine Foothills & River",
+   "from": 32000,
+   "to": 35000,
+   "lanes": 2,
+   "laneWidth": 3.5,
+   "shoulder": 1.6,
+   "sidewalk": false,
+   "curveAmp": 30,
+   "curveWave": 600,
+   "trafficPer100m": 0.8,
+   "pedPer100m": 0.1,
+   "obstaclePer100m": 1.2,
+   "traffic": [
+    "logging_truck",
+    "pickup",
+    "truck"
+   ],
+   "obstacles": [
+    "rock_small",
+    "rock",
+    "log",
+    "power_line_down",
+    "pothole"
+   ],
+   "scenery": [
+    "pine",
+    "log_cabin",
+    "lookout_tower",
+    "sawmill",
+    "river_rocks"
+   ],
+   "colors": {
+    "ground": "#5f7d4e",
+    "roadside": "#8f8a6a",
+    "road": "#4a4a48",
+    "line": "#e9d47c",
+    "sky": "#e8c79a",
+    "fog": "#d8c49e",
+    "sun": "#ffd79a"
+   },
+   "fogNear": 100,
+   "fogFar": 380,
+   "sideRoom": 26,
+   "road": {
+    "type": "rural"
+   },
+   "terrain": [
+    "terrain_forest_floor",
+    "terrain_hills",
+    "terrain_cliff"
+   ]
+  },
+  {
+   "id": "saltflats",
+   "name": "Salt Flats",
+   "from": 35000,
+   "to": 37000,
+   "lanes": 2,
+   "laneWidth": 3.6,
+   "shoulder": 1.6,
+   "sidewalk": false,
+   "curveAmp": 6,
+   "curveWave": 600,
+   "trafficPer100m": 0.5,
+   "pedPer100m": 0,
+   "obstaclePer100m": 1.1,
+   "traffic": [
+    "truck",
+    "pickup"
+   ],
+   "obstacles": [
+    "tumbleweed",
+    "rock",
+    "dust_devil",
+    "sanddrift",
+    "flood_wash"
+   ],
+   "scenery": [
+    "hoodoo",
+    "weather_balloon",
+    "motel_ruin",
+    "plane_wreck",
+    "cactus",
+    "powerpole",
+    "billboard"
+   ],
+   "colors": {
+    "ground": "#e7e2d4",
+    "roadside": "#dcd3bd",
+    "road": "#55504a",
+    "line": "#f0e2a0",
+    "sky": "#f2c792",
+    "fog": "#ecd2b0",
+    "sun": "#ffc98a"
+   },
+   "fogNear": 140,
+   "fogFar": 520,
+   "sideRoom": 30,
+   "road": {
+    "type": "rural"
+   },
+   "terrain": [
+    "terrain_salt"
+   ]
+  },
+  {
+   "id": "ghosttown",
+   "name": "Ghost Town",
+   "from": 37000,
+   "to": 38000,
+   "lanes": 2,
+   "laneWidth": 3.6,
+   "shoulder": 1.6,
+   "sidewalk": true,
+   "curveAmp": 6,
+   "curveWave": 600,
+   "trafficPer100m": 0.2,
+   "pedPer100m": 0.2,
+   "obstaclePer100m": 0.9,
+   "traffic": [
+    "truck"
+   ],
+   "obstacles": [
+    "tumbleweed",
+    "sanddrift",
+    "flood_wash"
+   ],
+   "scenery": [
+    "saloon",
+    "sheriff_office",
+    "chapel",
+    "water_tower_wood",
+    "livery_stable",
+    "boardwalk",
+    "shack",
+    "cactus"
+   ],
+   "colors": {
+    "ground": "#d29a68",
+    "roadside": "#c9a27a",
+    "road": "#55504a",
+    "line": "#f0e2a0",
+    "sky": "#f0a877",
+    "fog": "#e8b48a",
+    "sun": "#ffb878"
+   },
+   "fogNear": 110,
+   "fogFar": 420,
+   "sideRoom": 14,
+   "road": {
+    "type": "dirt"
+   },
+   "terrain": [
+    "terrain_dunes"
+   ]
+  },
+  {
+   "id": "canyon",
+   "name": "Red Canyon",
+   "from": 38000,
+   "to": 39400,
+   "lanes": 2,
+   "laneWidth": 3.6,
+   "shoulder": 1,
+   "sidewalk": false,
+   "curveAmp": 10,
+   "curveWave": 600,
+   "trafficPer100m": 0.15,
+   "pedPer100m": 0,
+   "obstaclePer100m": 0.9,
+   "traffic": [
+    "truck"
+   ],
+   "obstacles": [
+    "rock",
+    "rock_small"
+   ],
+   "scenery": [
+    "canyon_wall",
+    "rock_big",
+    "cactus",
+    "warning_sign"
+   ],
+   "colors": {
+    "ground": "#c4774a",
+    "roadside": "#b8704a",
+    "road": "#4e4643",
+    "line": "#f0e2a0",
+    "sky": "#f2a06e",
+    "fog": "#e9a27a",
+    "sun": "#ffb070"
+   },
+   "fogNear": 120,
+   "fogFar": 420,
+   "sideRoom": 3,
+   "road": {
+    "type": "rural"
+   },
+   "terrain": [
+    "terrain_scree"
+   ]
+  },
+  {
+   "id": "hideout",
+   "name": "Starlite Drive-In",
+   "from": 39400,
+   "to": 40000,
+   "lanes": 2,
+   "laneWidth": 3.6,
+   "shoulder": 1.5,
+   "sidewalk": false,
+   "curveAmp": 6,
+   "curveWave": 600,
+   "trafficPer100m": 0,
+   "pedPer100m": 0,
+   "obstaclePer100m": 0.3,
+   "traffic": [],
+   "obstacles": [
+    "tumbleweed"
+   ],
+   "scenery": [
+    "cactus",
+    "rock_big",
+    "mesa",
+    "powerpole"
+   ],
+   "colors": {
+    "ground": "#c98c62",
+    "roadside": "#d0a07a",
+    "road": "#55504a",
+    "line": "#f0e2a0",
+    "sky": "#d9826a",
+    "fog": "#d99a7a",
+    "sun": "#ff9f6a"
+   },
+   "fogNear": 110,
+   "fogFar": 420,
+   "sideRoom": 30,
+   "road": {
+    "type": "rural"
+   },
+   "terrain": [
+    "terrain_dunes"
+   ]
+  }
+ ],
+ "stops": [
+  {
+   "id": "hardware",
+   "name": "Bolt & Barrel Hardware",
+   "model": "store_hardware",
+   "variant": 0,
+   "z": 4800,
+   "side": 1,
+   "lotLength": 36,
+   "lotDepth": 16,
+   "loadTime": 2.5,
+   "gives": {
+    "salts": 2,
+    "solvent": 1
+   },
+   "shop": {
+    "type": "collect",
+    "title": "Shopping list sprint",
+    "goal": "Grab the 3 items on the list while the clerk is on the phone. Stay out of the camera cones.",
+    "interior": "shop_hardware_interior",
+    "items": 3,
+    "timeLimit": 60
+   }
+  },
+  {
+   "id": "market",
+   "name": "Old Town Market",
+   "model": "store_market",
+   "variant": 0,
+   "z": 9500,
+   "side": -1,
+   "lotLength": 36,
+   "lotDepth": 16,
+   "loadTime": 2.5,
+   "gives": {
+    "syrup": 1,
+    "salts": 1
+   },
+   "shop": {
+    "type": "haggle",
+    "title": "Haggle",
+    "goal": "Stop the swinging price needle in the green to get two jars for one, then carry the crates out.",
+    "rounds": 3,
+    "timeLimit": 50
+   }
+  },
+  {
+   "id": "chandlery",
+   "name": "Harbour Chandlery",
+   "model": "store_chandlery",
+   "variant": 0,
+   "z": 12600,
+   "side": 1,
+   "lotLength": 36,
+   "lotDepth": 16,
+   "loadTime": 2.5,
+   "gives": {
+    "catalyst": 1,
+    "scrap": 2
+   },
+   "shop": {
+    "type": "forklift",
+    "title": "Forklift run",
+    "goal": "Drive the forklift and set the pallet on the RV's rear rack.",
+    "timeLimit": 70
+   }
+  },
+  {
+   "id": "gas_ice",
+   "name": "Sunny Gas & Ice",
+   "model": "store_gas",
+   "variant": 0,
+   "z": 16800,
+   "side": -1,
+   "lotLength": 36,
+   "lotDepth": 16,
+   "loadTime": 2.5,
+   "gives": {
+    "fuel": 2,
+    "ice": 2
+   },
+   "shop": {
+    "type": "pump",
+    "title": "Pump & ice",
+    "goal": "Stop the pump meter on the line, then bag the ice before it melts.",
+    "timeLimit": 45
+   }
+  },
+  {
+   "id": "megamart",
+   "name": "MegaMart",
+   "model": "store_megamart",
+   "variant": 0,
+   "z": 27600,
+   "side": 1,
+   "lotLength": 36,
+   "lotDepth": 16,
+   "loadTime": 2.5,
+   "gives": {
+    "solvent": 2,
+    "ice": 1,
+    "scrap": 1
+   },
+   "shop": {
+    "type": "collect",
+    "variant": "trolley",
+    "title": "Trolley run",
+    "goal": "Push the trolley through the aisles and grab 4 items. Dodge the staff and the wet floor, then self-checkout.",
+    "interior": "shop_hardware_interior",
+    "items": 4,
+    "timeLimit": 70
+   }
+  },
+  {
+   "id": "farm",
+   "name": "Prickly Pete's Farm Supply",
+   "model": "store_farm",
+   "variant": 0,
+   "z": 30600,
+   "side": -1,
+   "lotLength": 36,
+   "lotDepth": 16,
+   "loadTime": 2.5,
+   "gives": {
+    "syrup": 2,
+    "salts": 1
+   },
+   "shop": {
+    "type": "goat",
+    "title": "Catch the goat",
+    "goal": "The goat ate the syrup label. Corner it in the barn, then load the feed sacks.",
+    "timeLimit": 60
+   }
+  },
+  {
+   "id": "junkyard",
+   "name": "Rustbucket Junkyard",
+   "model": "store_junkyard",
+   "variant": 0,
+   "z": 34000,
+   "side": 1,
+   "lotLength": 36,
+   "lotDepth": 16,
+   "loadTime": 2.5,
+   "gives": {
+    "catalyst": 2,
+    "scrap": 2
+   },
+   "shop": {
+    "type": "crane",
+    "title": "Magnet crane",
+    "goal": "Fish the copper coil out of the scrap pile with the magnet crane.",
+    "timeLimit": 60
+   }
+  },
+  {
+   "id": "lastgas",
+   "name": "Last Chance Gas",
+   "model": "store_gas",
+   "variant": 1,
+   "z": 37500,
+   "side": 1,
+   "lotLength": 36,
+   "lotDepth": 16,
+   "loadTime": 2.5,
+   "gives": {
+    "fuel": 2,
+    "solvent": 2,
+    "ice": 1
+   },
+   "shop": {
+    "type": "alarm",
+    "title": "Silent alarm",
+    "goal": "Grab the solvent from the stockroom before the silent alarm timer runs out. It trips anyway: run!",
+    "timeLimit": 40
+   },
+   "alarm": 2.6
+  }
+ ],
+ "events": [
+  {
+   "type": "roadwork",
+   "closedSide": 1,
+   "from": 6400,
+   "to": 6600
+  },
+  {
+   "type": "train",
+   "z": 1800,
+   "period": 24,
+   "warn": 5,
+   "pass": 7
+  },
+  {
+   "type": "dustStorm",
+   "from": 37000,
+   "to": 37700
+  },
+  {
+   "type": "rockfall",
+   "from": 38300,
+   "to": 38650,
+   "every": 2.2
+  }
+ ],
+ "setpieces": [
+  {
+   "id": "freight",
+   "type": "freight_wagons",
+   "area": "ironworks",
+   "z": 1800,
+   "desc": "Runaway freight wagons roll across the yard crossing"
+  },
+  {
+   "id": "comet",
+   "type": "midnight_comet",
+   "area": "downtown",
+   "z": 5600,
+   "pullSeconds": 60,
+   "desc": "The Midnight Comet crosses an intersection with 6 cop cars; your cops follow him for 60 s"
+  },
+  {
+   "id": "parade",
+   "type": "parade",
+   "area": "oldtown",
+   "from": 9900,
+   "to": 10300,
+   "side": 1,
+   "desc": "Founders' Day float and marching band fill Main Street; detour down the market alley (sidewalk) side"
+  },
+  {
+   "id": "drawbridge",
+   "type": "drawbridge",
+   "area": "docks",
+   "from": 13180,
+   "to": 13230,
+   "riseSeconds": 14,
+   "maxAngle": 0.55,
+   "desc": "The drawbridge starts rising as you arrive: jump it or wait 30 s"
+  },
+  {
+   "id": "wideload",
+   "type": "wide_load",
+   "area": "suburbs",
+   "z": 15600,
+   "speed": 6,
+   "length": 700,
+   "desc": "A house on a truck takes both lanes; crawl behind or detour through the back gardens"
+  },
+  {
+   "id": "carrier",
+   "type": "car_carrier",
+   "area": "interstate",
+   "z": 21500,
+   "desc": "A car carrier sheds its cars one by one"
+  },
+  {
+   "id": "toll",
+   "type": "toll_plaza",
+   "area": "interstate",
+   "z": 24500,
+   "desc": "Toll plaza; at 2+ stars the cops set up a checkpoint here"
+  },
+  {
+   "id": "gorilla",
+   "type": "inflatable_gorilla",
+   "area": "stripmall",
+   "z": 27000,
+   "desc": "Giant inflatable gorilla breaks loose and tumbles down the road"
+  },
+  {
+   "id": "carwash",
+   "type": "car_wash",
+   "area": "stripmall",
+   "z": 28200,
+   "side": 1,
+   "desc": "Drive through the car wash to drop one star (no cop within 40 m)"
+  },
+  {
+   "id": "cattle",
+   "type": "cattle_drive",
+   "area": "farmland",
+   "z": 30000,
+   "desc": "Cattle drive with cowboys crosses the road"
+  },
+  {
+   "id": "combine",
+   "type": "combine",
+   "area": "farmland",
+   "z": 31200,
+   "desc": "A combine harvester takes both lanes"
+  },
+  {
+   "id": "logs",
+   "type": "log_spill",
+   "area": "foothills",
+   "z": 33000,
+   "desc": "A logging truck jackknifes; logs roll down the hill across the road"
+  },
+  {
+   "id": "rattlers",
+   "type": "rattlers",
+   "area": "saltflats",
+   "z": 35300,
+   "desc": "The Rattlers biker gang rides alongside and tries to grab product"
+  },
+  {
+   "id": "tornado",
+   "type": "tornado",
+   "area": "saltflats",
+   "z": 36300,
+   "desc": "A tornado crosses the salt flats, throwing cars through the air"
+  },
+  {
+   "id": "stagecoach",
+   "type": "stagecoach",
+   "area": "ghosttown",
+   "z": 37200,
+   "desc": "A tourist stagecoach bolts across the street in the dust storm"
+  },
+  {
+   "id": "pratt",
+   "type": "pratt_jump",
+   "area": "canyon",
+   "z": 38900,
+   "desc": "Sergeant Pratt follows you onto the bridge ramp and doesn't make it"
+  },
+  {
+   "id": "handover",
+   "type": "handover",
+   "area": "hideout",
+   "z": 39800,
+   "desc": "Kestrel's men check the bags as the sun goes down"
+  }
+ ],
+ "structures": [
+  {
+   "type": "garage",
+   "z": 45,
+   "side": 1,
+   "model": "rooks_garage",
+   "interior": "garage_interior"
+  },
+  {
+   "type": "rail_crossing",
+   "z": 1800
+  },
+  {
+   "type": "drawbridge",
+   "from": 13180,
+   "to": 13230
+  },
+  {
+   "type": "overpass",
+   "z": 20500
+  },
+  {
+   "type": "overpass",
+   "z": 23200
+  },
+  {
+   "type": "toll_plaza",
+   "z": 24500
+  },
+  {
+   "type": "car_wash",
+   "z": 28200,
+   "side": 1
+  },
+  {
+   "type": "cattle_grid",
+   "z": 29500
+  },
+  {
+   "type": "river_bridge",
+   "from": 33585,
+   "to": 33615,
+   "model": "covered_bridge"
+  }
+ ],
+ "bridge": {
+  "name": "Broken Canyon Bridge",
+  "straightFrom": 38650,
+  "rampStart": 38850,
+  "lip": 38900,
+  "rampHeight": 8,
+  "gapStart": 38900,
+  "gapEnd": 38942,
+  "landingEnd": 38970,
+  "landingHeight": 0,
+  "minSpeedHint": 24.5,
+  "checkpointZ": 38480,
+  "fallPenalty": {
+   "rvDamage": 30,
+   "productLost": 1
+  },
+  "canyonDepth": 60,
+  "gravity": 9.81
+ },
+ "sellPoint": {
+  "z": 39800,
+  "side": 1,
+  "name": "Abandoned Drive-In",
+  "model": "sell_point",
+  "requiredUnits": 6,
+  "offset": 10,
+  "radius": 18
+ }
+}

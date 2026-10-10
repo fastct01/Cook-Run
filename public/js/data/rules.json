@@ -1,0 +1,911 @@
+{
+ "rv": {
+  "length": 8.6,
+  "width": 2.6,
+  "height": 3.4,
+  "maxHp": 100,
+  "crewMaxHp": 100,
+  "topSpeed": 30,
+  "reverseSpeed": 8,
+  "accel": 7.5,
+  "brake": 16,
+  "drag": 0.35,
+  "nitroSpeed": 40,
+  "nitroAccel": 16,
+  "nitroSeconds": 3.5,
+  "steerRate": 1.9,
+  "steerReturn": 3,
+  "gripCity": 0.92,
+  "gripOffroad": 0.75,
+  "offroadSlow": 0.55,
+  "sandSlow": 0.4,
+  "crashDamagePerMps": 0.55,
+  "minCrashSpeed": 4,
+  "regenDelay": 10,
+  "regenPerSec": 0.2
+ },
+ "heat": {
+  "maxStars": 5,
+  "sources": {
+   "pedHit": 0.45,
+   "copRam": 0.25,
+   "carCrash": 0.08,
+   "propSmash": 0.03,
+   "ventSmokePerSec": 0.02,
+   "labSpotted": 0.8,
+   "explosion": 0.6
+  },
+  "decayPerSec": 0.05,
+  "decayDelay": 7,
+  "copSightRange": 70,
+  "levels": [
+   {
+    "stars": 0,
+    "maxCops": 0,
+    "copTopSpeed": 0,
+    "spawnEvery": 999
+   },
+   {
+    "stars": 1,
+    "maxCops": 1,
+    "copTopSpeed": 28,
+    "spawnEvery": 9,
+    "ram": false
+   },
+   {
+    "stars": 2,
+    "maxCops": 2,
+    "copTopSpeed": 30,
+    "spawnEvery": 7,
+    "ram": true,
+    "moto": true
+   },
+   {
+    "stars": 3,
+    "maxCops": 3,
+    "copTopSpeed": 32,
+    "spawnEvery": 6,
+    "ram": true,
+    "roadblocks": true,
+    "spikes": true,
+    "moto": true
+   },
+   {
+    "stars": 4,
+    "maxCops": 4,
+    "copTopSpeed": 34,
+    "spawnEvery": 5,
+    "ram": true,
+    "roadblocks": true,
+    "spikes": true,
+    "suv": true,
+    "moto": true
+   },
+   {
+    "stars": 5,
+    "maxCops": 5,
+    "copTopSpeed": 36,
+    "spawnEvery": 4,
+    "ram": true,
+    "roadblocks": true,
+    "spikes": true,
+    "suv": true,
+    "heli": true,
+    "moto": true,
+    "rhino": true
+   }
+  ],
+  "roadblockEvery": 25,
+  "spikesEvery": 18,
+  "bust": {
+   "radius": 7.5,
+   "maxRvSpeed": 4,
+   "seconds": 2.5,
+   "decayPerSec": 0.6
+  },
+  "copRamDamage": 6,
+  "suvRamDamage": 10,
+  "giveUpAtBridge": true,
+  "moto": {
+   "topSpeed": 38,
+   "hp": 12,
+   "ramDamage": 3,
+   "share": 0.35
+  },
+  "rhino": {
+   "hp": 160,
+   "topSpeed": 33,
+   "ramDamage": 14,
+   "throwEvery": 5.5,
+   "aheadDist": [
+    25,
+    45
+   ],
+   "maxCanistersOut": 3,
+   "flash": {
+    "fuse": 0.9,
+    "radius": 7,
+    "damage": 8,
+    "push": 7,
+    "whiteout": 0.55
+   },
+   "foam": {
+    "fuse": 0.4,
+    "radius": 5,
+    "slowTo": 4,
+    "seconds": 3,
+    "patchSeconds": 30
+   },
+   "spawnDelay": 4,
+   "respawnEvery": 25
+  },
+  "carWashDrop": 1,
+  "comet": {
+   "pullSeconds": 60
+  },
+  "carWashCopRange": 40
+ },
+ "gadgets": {
+  "smoke": {
+   "key": "KeyQ",
+   "duration": 6,
+   "radius": 9,
+   "blindSeconds": 4
+  },
+  "oil": {
+   "key": "KeyE",
+   "duration": 14,
+   "radius": 4.5,
+   "spinSeconds": 2.5
+  },
+  "nitro": {
+   "key": "ShiftLeft",
+   "seconds": 3.5
+  }
+ },
+ "obstacles": {
+  "cone": {
+   "radius": 0.45,
+   "smashable": true,
+   "damage": 0,
+   "slow": 0.02,
+   "points": 5,
+   "heat": 0
+  },
+  "trashcan": {
+   "radius": 0.6,
+   "smashable": true,
+   "damage": 1,
+   "slow": 0.05,
+   "points": 10,
+   "heat": 0.03
+  },
+  "mailbox": {
+   "radius": 0.5,
+   "smashable": true,
+   "damage": 1,
+   "slow": 0.04,
+   "points": 15,
+   "heat": 0.03
+  },
+  "hydrant": {
+   "radius": 0.45,
+   "smashable": true,
+   "damage": 3,
+   "slow": 0.1,
+   "points": 20,
+   "heat": 0.05,
+   "fx": "geyser"
+  },
+  "barrier": {
+   "radius": 1.4,
+   "smashable": true,
+   "damage": 4,
+   "slow": 0.25,
+   "points": 10,
+   "heat": 0.03
+  },
+  "sprinkler": {
+   "radius": 0.4,
+   "smashable": true,
+   "damage": 0,
+   "slow": 0,
+   "points": 5,
+   "heat": 0,
+   "fx": "geyser"
+  },
+  "hay": {
+   "radius": 1.2,
+   "smashable": true,
+   "damage": 2,
+   "slow": 0.2,
+   "points": 15,
+   "heat": 0
+  },
+  "tumbleweed": {
+   "radius": 0.8,
+   "smashable": true,
+   "damage": 0,
+   "slow": 0,
+   "points": 5,
+   "heat": 0,
+   "moves": true
+  },
+  "pothole": {
+   "radius": 1,
+   "smashable": false,
+   "damage": 2,
+   "slow": 0.08,
+   "points": 0,
+   "heat": 0,
+   "bump": 0.9,
+   "flat": true
+  },
+  "sanddrift": {
+   "radius": 3,
+   "smashable": false,
+   "damage": 0,
+   "slow": 0,
+   "points": 0,
+   "heat": 0,
+   "bump": 0.3,
+   "flat": true,
+   "drag": true
+  },
+  "rock_small": {
+   "radius": 0.8,
+   "smashable": false,
+   "damage": 6,
+   "slow": 0.35,
+   "points": 0,
+   "heat": 0,
+   "bump": 0.8
+  },
+  "rock": {
+   "radius": 1.5,
+   "smashable": false,
+   "damage": 12,
+   "slow": 0.7,
+   "points": 0,
+   "heat": 0,
+   "bump": 1
+  },
+  "cactus_road": {
+   "radius": 0.6,
+   "smashable": true,
+   "damage": 3,
+   "slow": 0.1,
+   "points": 10,
+   "heat": 0
+  },
+  "cow": {
+   "radius": 1.3,
+   "smashable": false,
+   "damage": 10,
+   "slow": 0.8,
+   "points": 0,
+   "heat": 0,
+   "bump": 1,
+   "moves": true,
+   "blocker": true
+  },
+  "spikes": {
+   "radius": 1,
+   "smashable": false,
+   "damage": 5,
+   "slow": 0,
+   "points": 0,
+   "heat": 0,
+   "flat": true,
+   "flatTyreSeconds": 8
+  },
+  "falling_rock": {
+   "radius": 1.6,
+   "smashable": false,
+   "damage": 14,
+   "slow": 0.6,
+   "points": 0,
+   "heat": 0,
+   "bump": 1
+  },
+  "roadblock": {
+   "radius": 0.6,
+   "smashable": true,
+   "damage": 8,
+   "slow": 0.3,
+   "points": 50,
+   "heat": 0.1,
+   "bump": 0.9,
+   "halfLen": 1.6
+  },
+  "steam_leak": {
+   "radius": 3,
+   "smashable": false,
+   "damage": 0,
+   "slow": 0,
+   "points": 0,
+   "heat": 0,
+   "flat": true,
+   "slip": 0.55,
+   "fog": 2.2
+  },
+  "water_main": {
+   "radius": 3.5,
+   "smashable": false,
+   "damage": 0,
+   "slow": 0.12,
+   "points": 0,
+   "heat": 0,
+   "flat": true,
+   "slip": 0.45,
+   "fog": 1,
+   "drag": true
+  },
+  "trench_plates": {
+   "radius": 2.6,
+   "smashable": false,
+   "damage": 1,
+   "slow": 0.05,
+   "points": 0,
+   "heat": 0,
+   "flat": true,
+   "bump": 0.7
+  },
+  "manhole_open": {
+   "radius": 0.9,
+   "smashable": false,
+   "damage": 3,
+   "slow": 0.08,
+   "points": 0,
+   "heat": 0,
+   "flat": true,
+   "bump": 0.9
+  },
+  "sinkhole": {
+   "radius": 3,
+   "smashable": false,
+   "damage": 12,
+   "slow": 0.8,
+   "points": 0,
+   "heat": 0,
+   "blocker": true,
+   "bump": 1
+  },
+  "speed_bump": {
+   "radius": 3.5,
+   "smashable": false,
+   "damage": 0,
+   "slow": 0.03,
+   "points": 0,
+   "heat": 0,
+   "flat": true,
+   "bump": 0.6,
+   "lateral": 7
+  },
+  "broken_car": {
+   "radius": 2.4,
+   "smashable": false,
+   "damage": 8,
+   "slow": 0.6,
+   "points": 0,
+   "heat": 0,
+   "blocker": true,
+   "bump": 0.9
+  },
+  "trolley": {
+   "radius": 0.6,
+   "smashable": true,
+   "damage": 0,
+   "slow": 0.02,
+   "points": 10,
+   "heat": 0,
+   "moves": true
+  },
+  "power_line_down": {
+   "radius": 3,
+   "smashable": false,
+   "damage": 6,
+   "slow": 0.1,
+   "points": 0,
+   "heat": 0,
+   "flat": true,
+   "shock": 1
+  },
+  "log": {
+   "radius": 1.2,
+   "smashable": false,
+   "damage": 14,
+   "slow": 0.6,
+   "points": 0,
+   "heat": 0,
+   "bump": 1,
+   "moves": true
+  },
+  "dust_devil": {
+   "radius": 4,
+   "smashable": false,
+   "damage": 0,
+   "slow": 0,
+   "points": 0,
+   "heat": 0,
+   "flat": true,
+   "moves": true,
+   "push": 6
+  },
+  "flood_wash": {
+   "radius": 6,
+   "smashable": false,
+   "damage": 0,
+   "slow": 0,
+   "points": 0,
+   "heat": 0,
+   "flat": true,
+   "drag": true,
+   "fog": 0.8
+  },
+  "sheep": {
+   "radius": 0.9,
+   "smashable": false,
+   "damage": 4,
+   "slow": 0.5,
+   "points": 0,
+   "heat": 0,
+   "bump": 0.7,
+   "moves": true,
+   "blocker": true
+  },
+  "foam_patch": {
+   "radius": 5,
+   "smashable": false,
+   "damage": 0,
+   "slow": 0,
+   "points": 0,
+   "heat": 0,
+   "flat": true,
+   "foam": 3
+  }
+ },
+ "traffic": {
+  "sedan": {
+   "length": 4.6,
+   "width": 1.9,
+   "speed": [
+    11,
+    16
+   ],
+   "mass": 1
+  },
+  "hatch": {
+   "length": 3.9,
+   "width": 1.8,
+   "speed": [
+    10,
+    15
+   ],
+   "mass": 0.9
+  },
+  "van": {
+   "length": 5,
+   "width": 2,
+   "speed": [
+    10,
+    14
+   ],
+   "mass": 1.2
+  },
+  "pickup": {
+   "length": 5.4,
+   "width": 2,
+   "speed": [
+    12,
+    18
+   ],
+   "mass": 1.3
+  },
+  "bus": {
+   "length": 11,
+   "width": 2.6,
+   "speed": [
+    8,
+    11
+   ],
+   "mass": 3
+  },
+  "truck": {
+   "length": 12,
+   "width": 2.6,
+   "speed": [
+    14,
+    20
+   ],
+   "mass": 3.5
+  },
+  "tractor": {
+   "length": 4.2,
+   "width": 2.2,
+   "speed": [
+    4,
+    6
+   ],
+   "mass": 2
+  },
+  "rival": {
+   "length": 5.4,
+   "width": 2,
+   "speed": [
+    22,
+    26
+   ],
+   "mass": 1.4,
+   "hostile": true,
+   "ramDamage": 7
+  },
+  "garbage_truck": {
+   "length": 9.2,
+   "width": 2.6,
+   "speed": [
+    7,
+    11
+   ],
+   "mass": 3
+  },
+  "news_van": {
+   "length": 6.3,
+   "width": 2.2,
+   "speed": [
+    10,
+    15
+   ],
+   "mass": 1.4
+  },
+  "forklift": {
+   "length": 3.3,
+   "width": 1.3,
+   "speed": [
+    3,
+    5
+   ],
+   "mass": 1.5,
+   "slow": true
+  },
+  "car_carrier": {
+   "length": 17,
+   "width": 2.6,
+   "speed": [
+    14,
+    18
+   ],
+   "mass": 4.5,
+   "long": true
+  },
+  "logging_truck": {
+   "length": 14.6,
+   "width": 2.6,
+   "speed": [
+    12,
+    16
+   ],
+   "mass": 4.5,
+   "long": true
+  },
+  "combine": {
+   "length": 9.4,
+   "width": 5.2,
+   "speed": [
+    4,
+    6
+   ],
+   "mass": 5,
+   "slow": true,
+   "wide": true
+  },
+  "streetcar": {
+   "length": 14,
+   "width": 2.6,
+   "speed": [
+    8,
+    11
+   ],
+   "mass": 6,
+   "rails": true
+  }
+ },
+ "peds": {
+  "radius": 0.45,
+  "walkSpeed": [
+   1.1,
+   1.8
+  ],
+  "panicSpeed": 3.5,
+  "hornScareRadius": 22,
+  "knockMinSpeed": 3,
+  "dazedSeconds": 4
+ },
+ "scoring": {
+  "pedPoints": 100,
+  "pedChaosStars": 1,
+  "copWreckPoints": 250,
+  "perUnitValue": 1200,
+  "timeBonusPerSecUnder": 4,
+  "parTimeSeconds": 2700,
+  "smoothBonusPerSec": 2,
+  "noKnockBonus": 1500,
+  "stars": [
+   0,
+   2500,
+   4000
+  ]
+ },
+ "net": {
+  "snapshotHz": 15,
+  "labHz": 6,
+  "maxEntitiesInSnapshot": 90,
+  "snapshotRadiusBehind": 120,
+  "snapshotRadiusAhead": 260
+ },
+ "sim": {
+  "_note": "Agent SIM tuning knobs (see docs/NOTES-sim.md). Every key has a code default in sim/config.js.",
+  "countdownSeconds": 3,
+  "rv": {
+   "mass": 3,
+   "steerFollow": 6,
+   "steerFullAt": 5,
+   "steerFalloff": 18,
+   "gripScale": 1.5,
+   "handbrakeGrip": 0.35,
+   "handbrakeDecel": 6,
+   "handbrakeYaw": 1.3,
+   "rollDecel": 0.5,
+   "dragScale": 0.25,
+   "overspeedDecel": 5,
+   "shoulderSlow": 0.85,
+   "flatTopFactor": 0.7,
+   "flatWobble": 0.18,
+   "railMargin": 0.8,
+   "railScrapeDamagePerMps": 0.35,
+   "wallBounce": 0.25,
+   "hardLandingVy": -9,
+   "hardLandingDamagePerMps": 1.5,
+   "hardLandingBase": 4,
+   "jumpLandMargin": 1,
+   "respawnGrace": 2,
+   "resetCooldown": 3,
+   "oilGrip": 0.3
+  },
+  "startGadgets": {
+   "smoke": 1,
+   "oil": 0,
+   "nitro": 0
+  },
+  "traffic": {
+   "windowBehind": 70,
+   "windowAhead": 400,
+   "spawnAhead": [
+    240,
+    330
+   ],
+   "oncomingShare": 0.45,
+   "maxCars": 16,
+   "laneChangeRate": 1.4,
+   "followGap": 7,
+   "lookAhead": 38,
+   "crashFriction": 7,
+   "spinFriction": 5,
+   "restitution": 0.25
+  },
+  "rival": {
+   "spawnAt": [],
+   "hp": 60,
+   "topSpeed": 33,
+   "spawnBehind": 110,
+   "ramCooldown": 4,
+   "sideOffset": 3.4,
+   "ramSeconds": 0.8,
+   "giveUpAfterGadget": true,
+   "maxRams": 4,
+   "maxChaseSeconds": 45,
+   "biomes": [
+    "saltflats"
+   ]
+  },
+  "peds": {
+   "windowBehind": 50,
+   "windowAhead": 300,
+   "spawnAhead": [
+    150,
+    280
+   ],
+   "maxPeds": 26,
+   "jaywalkChance": 0.12,
+   "crossGroupChance": 0.75,
+   "crossGroupSize": [
+    2,
+    4
+   ],
+   "crossTriggerAhead": [
+    100,
+    150
+   ],
+   "panicSeconds": 3,
+   "getUpSeconds": 1.2,
+   "groundFriction": 6
+  },
+  "obstacles": {
+   "chunk": 50,
+   "windowBehind": 80,
+   "windowAhead": 320,
+   "excludeStart": 90,
+   "hitCooldown": 0.8,
+   "flyingSeconds": 1.4
+  },
+  "cops": {
+   "hp": 45,
+   "suvHp": 80,
+   "mass": 1.2,
+   "suvMass": 1.8,
+   "length": 4.8,
+   "width": 1.95,
+   "suvLength": 5.2,
+   "suvWidth": 2.1,
+   "accel": 9,
+   "brake": 14,
+   "grip": 13,
+   "maxYawRate": 1.7,
+   "rubberBand": 5,
+   "rubberBandFrom": 90,
+   "loseRange": 230,
+   "spawnBehind": [
+    90,
+    130
+   ],
+   "spawnAhead": [
+    170,
+    220
+   ],
+   "spawnAheadChance": 0.3,
+   "followDist": 6,
+   "ramRange": 26,
+   "ramCooldown": 7,
+   "ramSeconds": 0.7,
+   "aiCrashDamageScale": 0.25,
+   "copRamHeatMinSpeed": 4,
+   "copRamHeatCooldown": 4,
+   "sideOffset": 3.3,
+   "heliHeight": 24,
+   "heliSpeed": 45,
+   "roadblockAhead": 220,
+   "spikesAhead": [
+    140,
+    175
+   ],
+   "stopBeforeRamp": 12,
+   "comicFlyRange": 15,
+   "damageMult": 2.2,
+   "firstRoadblockDelay": 6,
+   "firstSpawnDelay": 1.5,
+   "parkedActivateRange": 35,
+   "ramGlobalCooldown": 8,
+   "rubberBandMinStars": 3,
+   "alarmSpawnDelay": 2
+  },
+  "heatExtra": {
+   "spawnNeedsRecent": true,
+   "calmDelay": 12,
+   "calmDecayPerSec": 0.025
+  },
+  "patrol": {
+   "enabled": true,
+   "biomes": [
+    "ironworks",
+    "downtown",
+    "oldtown",
+    "docks",
+    "suburbs",
+    "stripmall"
+   ],
+   "chance": 0.35,
+   "minZ": 150,
+   "zOffset": 5,
+   "offset": 3,
+   "spawnAhead": 320,
+   "watchRadius": 45,
+   "speedLimit": {
+    "city": 17,
+    "suburbs": 20,
+    "ironworks": 17,
+    "downtown": 17,
+    "oldtown": 15,
+    "docks": 17,
+    "stripmall": 20
+   },
+   "speedingHeat": 0.35,
+   "witnessHeat": 0.25,
+   "ticketCooldown": 30
+  },
+  "lab": {
+   "spottedRange": 18,
+   "spottedCooldown": 6,
+   "copCloseRange": 18,
+   "cookReviveSeconds": 12,
+   "cookReviveHp": 25,
+   "ventSmokeWitnessed": false,
+   "hostCookDamage": false
+  },
+  "stops": {
+   "maxLoadSpeed": 2.5,
+   "blockRadius": 25,
+   "nearRange": 250
+  },
+  "sell": {
+   "maxSpeed": 3
+  },
+  "rockfall": {
+   "spawnAhead": [
+    30,
+    120
+   ],
+   "leadSeconds": [
+    0.8,
+    1.8
+   ],
+   "minSpacing": 14,
+   "height": 25,
+   "maxRocks": 14,
+   "startBefore": 60
+  },
+  "train": {
+   "length": 60,
+   "width": 3.4,
+   "damage": 40,
+   "gateOffset": 5,
+   "announceRange": 500
+  },
+  "scoring": {
+   "smoothLatAcc": 2,
+   "smoothMaxBump": 0.08,
+   "smoothMinSpeed": 5
+  },
+  "feel": {
+   "bumpDecay": 3,
+   "latAccSmooth": 0.12
+  },
+  "garageCountdownSeconds": 1.5
+ },
+ "roof": {
+  "climbSeconds": 1.6,
+  "hose": {
+   "range": 15,
+   "coneDeg": 10,
+   "push": 5,
+   "soakSeconds": 2.5
+  },
+  "firecracker": {
+   "ammo": 3,
+   "radius": 6,
+   "stallSeconds": 3
+  },
+  "balloon": {
+   "ammo": 4,
+   "radius": 2.5,
+   "blindSeconds": 4
+  },
+  "flare": {
+   "usesSmokeCharge": true,
+   "radius": 9,
+   "seconds": 6
+  },
+  "aiAccuracy": 0.55
+ },
+ "stops": {
+  "bannerDist": 800,
+  "arrowDist": 600,
+  "shopMaxSeconds": 90,
+  "returnSeconds": 2,
+  "copBlockRadius": 25,
+  "bonusScore": 0.8,
+  "parkSeconds": 0.6
+ },
+ "tutorial": {
+  "skippable": true
+ }
+}

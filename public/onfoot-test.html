@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cook &amp; Run — on-foot test (garage + shops)</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/hud.css">
+<link rel="stylesheet" href="css/onfoot.css">
+<style>
+  html, body { margin: 0; height: 100%; background: #22262a; overflow: hidden; }
+  #stage { position: fixed; inset: 0; }
+  #view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #hudroot { position: absolute; inset: 0; pointer-events: none; }
+  #dbg { position: fixed; left: 50%; bottom: 0; transform: translateX(-50%); z-index: 20; display: flex; gap: 4px; flex-wrap: wrap; justify-content: center;
+         font: 600 11px/1 system-ui, sans-serif; color: #f1ead8; padding: 4px 6px; background: rgba(34,38,42,.6); border-radius: 6px 6px 0 0; pointer-events: auto; }
+  #dbg a, #dbg button { color: #d9a83a; text-decoration: none; padding: 3px 5px; border-radius: 4px; background: rgba(0,0,0,.25); border: 0; font: inherit; cursor: pointer; }
+  #dbg a.on { background: #d9a83a; color: #22262a; }
+  #dbg span { padding: 3px 4px; opacity: .8; font-variant-numeric: tabular-nums; }
+  body.shot #dbg { display: none; }
+</style>
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+</head>
+<body>
+<div id="stage">
+  <canvas id="view" tabindex="-1"></canvas>
+  <div id="hudroot"></div>
+</div>
+<div id="dbg"></div>
+<script type="module">
+// Harness for Agent ONFOOT.
+//   onfoot-test.html?mode=garage&role=driver|cook[&solo=1][&bot=partner|me|both][&local=1]
+//       Real GameSim when SIM-CORE has wired the garage (sim.phase === 'garage'), otherwise a local loop:
+//       GarageTutorial with a mock sim → mock snapshots → WorldView + GarageView. `bot` scripts players
+//       (partner = the other avatar; me = your avatar through the real key path). The cook role gets
+//       15 Hz snapshots with ~80 ms latency (like the network).
+//   onfoot-test.html?mode=shop&stop=hardware|market|chandlery|gas_ice|megamart|farm|junkyard|lastgas[&bot=1]
+//       One ShopChallenge on a WorldView. bot=1 → the built-in scripted player.
+//   &shot=1 hides the debug bar · &dt=0.033 fixed frame step
+// Exposes window.__onfoot = { mode, view, gv, g, sim, shop, fast(sec), state(), key(code, down), done, score, errors }
+import { loadData } from './js/data/loadData.js';
+import { WorldView } from './js/render/WorldView.js';
+import { FakeSnapshots } from './js/render/fakeSnapshots.js';
+import { GameSim } from './js/sim/GameSim.js';
+import { GarageTutorial } from './js/sim/garage.js';
+import { GarageView } from './js/onfoot/GarageView.js';
+import { GarageBot, wasdFor } from './js/onfoot/test/garageBot.js';
+import { DCMD } from './js/shared/protocol.js';
+
+const q = new URLSearchParams(location.search);
+const mode = q.get('mode') || 'garage';
+const role = q.get('role') === 'cook' ? 'cook' : 'driver';
+const solo = q.get('solo') === '1';
+const botArg = q.get('bot') || '';
+const fixedDt = q.has('dt') ? +q.get('dt') : null;
+if (q.has('shot')) document.body.classList.add('shot');
+const STEP = 1 / 60;
+
+const data = await loadData();
+const canvas = document.getElementById('view');
+const hudRoot = document.getElementById('hudroot');
+const seed = data.route.defaultSeed ?? 1;
+const view = new WorldView(canvas, data, { seed, role });
+const O = window.__onfoot = { mode, role, view, errors: [], done: false, score: null, aborted: false };
+window.__view = view;
+const dbg = document.getElementById('dbg');
+
+function link(label, params, on) {
+  const a = document.createElement('a');
+  const p = new URLSearchParams(params);
+  a.href = '?' + p.toString(); a.textContent = label; if (on) a.className = 'on';
+  dbg.appendChild(a);
+}
+for (const [l, p] of [['garage·driver', { mode: 'garage', role: 'driver', bot: 'partner' }], ['garage·cook', { mode: 'garage', role: 'cook', bot: 'partner' }], ['garage·solo', { mode: 'garage', role: 'driver', solo: 1 }]]) link(l, p, mode === 'garage' && role === p.role && !!solo === !!p.solo);
+for (const s of data.route.stops) link(s.id, { mode: 'shop', stop: s.id }, mode === 'shop' && q.get('stop') === s.id);
+const info = document.createElement('span'); dbg.appendChild(info);
+
+// ═══════════════════════════════════ garage ═══════════════════════════════════
+if (mode === 'garage') {
+  // real sim if SIM-CORE wired the garage, else a local loop with a mock sim
+  let sim = null, g = null, real = false;
+  if (q.get('local') !== '1') {
+    try {
+      sim = new GameSim(data, { seed, solo });
+      if (sim.phase === 'garage' && sim.garage && sim.garage.state && sim.garage.state()) { real = true; g = sim.garage; }
+    } catch (e) { console.warn('[onfoot-test] GameSim failed, using the local loop', e); }
+  }
+  const mockEvents = [];
+  if (!real) {
+    sim = null;
+    const track = view.track;
+    g = new GarageTutorial({ track, route: data.route, rules: data.rules, data, solo, emit: (e) => mockEvents.push(e) });
+  }
+  O.real = real; O.g = g; O.sim = sim;
+  const base = new FakeSnapshots(data, { seed, preset: 'drive', start: 45, speed: 0 }).snapshot(0);
+  let simT = 0;
+  function mockSnap() {
+    const rv = { ...base.rv, x: g.rvPark.x, z: g.rvPark.z, yaw: g.rvPark.yaw, speed: 0, steer: 0, pitch: 0, roll: 0, airborne: false };
+    const ev = mockEvents.splice(0);
+    return { ...base, t: simT, phase: g.done ? 'countdown' : 'garage', countdown: 1.5, rv, ents: [], events: ev, garage: g.state(), stop: null, nearStop: null };
+  }
+  const snapNow = () => (real ? sim.snapshot() : mockSnap());
+
+  const gv = new GarageView(view, data, { role, hudRoot, solo, onSkip: () => { if (real) sim.applyDriverCommand ? sim.applyDriverCommand({ type: DCMD.SKIP_TUTORIAL }) : g.skip(); else g.skip(); } });
+  O.gv = gv;
+  window.addEventListener('keydown', (e) => { if (gv.onKey(e, true)) e.preventDefault(); });
+  window.addEventListener('keyup', (e) => { if (gv.onKey(e, false)) e.preventDefault(); });
+  O.key = (code, down) => gv.onKey({ code, repeat: false, preventDefault() {} }, down);
+
+  // bots: partner (the other avatar, direct inputs) and/or me (through GarageView's key path)
+  const F = g.frame;
+  const partnerWho = role === 'driver' ? 'doc' : 'rook', meWho = role === 'driver' ? 'rook' : 'doc';
+  const partnerBot = (botArg === 'partner' || botArg === 'both') && !(solo && partnerWho === 'doc') ? new GarageBot(partnerWho, F) : null;
+  const meBot = (botArg === 'me' || botArg === 'both') ? new GarageBot(meWho, F) : null;
+  let botKeys = new Set();
+  const cmdQueue = [];       // cook → host with latency
+  const snapQueue = [];      // host → cook with latency
+  let lastCookSnap = null, stepN = 0;
+  const gState = () => (real ? sim.garage.state() : g.state());
+
+  function stepOnce() {
+    const G = gState();
+    // my bot drives the keys like a player
+    if (meBot) {
+      const b = meBot.tick(G, STEP);
+      const want = new Set(wasdFor(b.mx, b.mz, gv.cameraYaw));
+      if (b.run) want.add('ShiftLeft');
+      for (const c of botKeys) if (!want.has(c)) O.key(c, false);
+      for (const c of want) if (!botKeys.has(c)) O.key(c, true);
+      botKeys = want;
+      if (b.act) { O.key('KeyE', true); if (!b.held) O.key('KeyE', false); }
+      else if (!b.held && gv.keys.has('ACT')) O.key('KeyE', false);
+    }
+    const pb = partnerBot ? partnerBot.tick(G, STEP) : null;
+    let input = { throttle: 0, steer: 0, handbrake: false, horn: false, smoke: false, oil: false, nitro: false, reset: false };
+    if (role === 'driver') {
+      Object.assign(input, gv.consumeInput());
+      if (pb && stepN % 4 === 0) (real ? sim.applyCookCommand.bind(sim) : g.command.bind(g))({ type: 'avatarMove', mx: pb.mx, mz: pb.mz, run: pb.run });
+      if (pb && pb.act) (real ? sim.applyCookCommand.bind(sim) : g.command.bind(g))({ type: 'avatarAct' });
+    } else {
+      if (pb) Object.assign(input, { moveX: pb.mx, moveZ: pb.mz, run: pb.run, interact: pb.act, interactHeld: pb.held });
+      for (const c of gv.pollCommands(STEP)) cmdQueue.push({ at: simT + 0.04, c });
+      while (cmdQueue.length && cmdQueue[0].at <= simT) { const { c } = cmdQueue.shift(); real ? sim.applyCookCommand(c) : g.command(c); }
+    }
+    if (real) sim.step(input, STEP); else g.update(STEP, input);
+    simT += STEP; stepN++;
+    if (role === 'cook' && stepN % 4 === 0) snapQueue.push({ at: simT + 0.04, s: real ? sim.netSnapshot() : JSON.parse(JSON.stringify(mockSnap())) });
+    if (g.done && !O.done) { O.done = true; O.doneT = simT; }
+  }
+  function cookSnap() {
+    while (snapQueue.length && (O.paused || snapQueue[0].at <= simT)) lastCookSnap = snapQueue.shift().s;
+    return lastCookSnap;
+  }
+  O.fast = (sec) => { const n = Math.round(sec / STEP); for (let i = 0; i < n; i++) stepOnce(); };
+  O.state = () => gState();
+  O.skip = () => gv.onSkip && gv.onSkip();
+
+  let acc = 0, last = performance.now();
+  let tAfterDone = 0;
+  function frame(now) {
+    requestAnimationFrame(frame);
+    let dt = fixedDt ?? Math.min(0.1, (now - last) / 1000); last = now;
+    acc += O.paused ? 0 : dt;
+    let n = 0;
+    while (acc >= STEP && n < 8) { stepOnce(); acc -= STEP; n++; }
+    if (n === 8) acc = 0;
+    let snap;
+    if (role === 'driver') { snap = snapNow(); view.pushSnapshot(snap, { interpolate: false }); }
+    else { snap = cookSnap(); if (snap) view.pushSnapshot(snap, { interpolate: true }); }
+    if (O.done) tAfterDone += dt;
+    gv.update(dt, snap || null);
+    view.render(dt);
+    O.calls = view.renderer.info.render.calls;
+    const G = gState();
+    info.textContent = `${real ? 'GameSim' : 'local loop'} · ${role}${solo ? ' solo' : ''} · step ${G?.step} ${G?.stepId} · t ${simT.toFixed(1)} · calls ${O.calls} · ${gv.finished ? 'finished' : ''}`;
+  }
+  requestAnimationFrame(frame);
+}
+
+// ═══════════════════════════════════ shops ════════════════════════════════════
+if (mode === 'shop') {
+  const stopDef = data.route.stops.find((s) => s.id === (q.get('stop') || 'hardware')) || data.route.stops[0];
+  const base = new FakeSnapshots(data, { seed, preset: 'drive', start: stopDef.z - 10, speed: 0 }).snapshot(0);
+  view.pushSnapshot({ ...base, rv: { ...base.rv, speed: 0 }, ents: [] }, { interpolate: false });
+  const { ShopChallenge } = await import('./js/onfoot/shops/ShopChallenge.js');
+  const shop = new ShopChallenge(view, stopDef, data, {
+    hudRoot,
+    onDone: (score) => { O.done = true; O.score = score; console.log('[onfoot-test] onDone', score); },
+    onAbort: () => { O.aborted = true; console.log('[onfoot-test] onAbort'); },
+  });
+  O.shop = shop; O.stop = stopDef;
+  window.addEventListener('keydown', (e) => { if (shop.onKey(e, true)) e.preventDefault(); });
+  window.addEventListener('keyup', (e) => { if (shop.onKey(e, false)) e.preventDefault(); });
+  O.key = (code, down) => shop.onKey({ code, key: code, repeat: false, preventDefault() {} }, down);
+  if (botArg) shop.setBot(true);
+  O.fast = (sec) => shop.fastForward(sec);
+  O.state = () => shop.debugState();
+  let last = performance.now();
+  function frame(now) {
+    requestAnimationFrame(frame);
+    const dt = fixedDt ?? Math.min(0.1, (now - last) / 1000); last = now;
+    shop.update(dt);
+    view.render(dt);
+    O.calls = view.renderer.info.render.calls;
+    const s = shop.debugState();
+    info.textContent = `${stopDef.id} · ${stopDef.shop.type}${stopDef.shop.variant ? '/' + stopDef.shop.variant : ''} · ${s.phase} · t ${s.t?.toFixed?.(1)} · calls ${O.calls}${O.done ? ' · score ' + O.score.toFixed(2) : ''}`;
+  }
+  requestAnimationFrame(frame);
+}
+</script>
+</body>
+</html>

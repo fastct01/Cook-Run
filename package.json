@@ -1,0 +1,28 @@
+{
+  "name": "cook-and-run",
+  "version": "0.1.0",
+  "description": "Two-player co-op road-chase + mobile-lab game. One drives the RV, one cooks in the back.",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "postinstall": "node scripts/copy-vendor.js",
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test:sim": "node public/js/sim/test/run-headless.js",
+    "test:net": "node scripts/test-net.mjs",
+    "test:net:browser": "node scripts/test-net.mjs --browser",
+    "test": "npm run test:sim && npm run test:cook && npm run test:assets && npm run test:net && npm run test:e2e",
+    "test:cook": "node public/js/cook/test/lab-headless.js",
+    "test:assets": "node public/js/assets/test/check-assets.js",
+    "test:e2e": "node scripts/test-e2e.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.22.3",
+    "three": "^0.170.0",
+    "ws": "^8.22.0"
+  }
+}

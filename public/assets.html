@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cook &amp; Run Asset Kit</title>
+<meta name="description" content="Procedural low-poly asset kit for Cook & Run: browse every model, inspect named parts, export .glb for Unity.">
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+<style>
+  :root {
+    --studio: #2b2a28;
+    --stage-top: #3d3c38;
+    --stage-bot: #2f2e2b;
+    --line: rgba(235, 229, 214, 0.09);
+    --ink: #ebe5d6;
+    --muted: #a39d8f;
+    --mustard: #d9a83a;
+    --teal: #4f8f8a;
+    --teal-deep: #3b6f6b;
+    --danger: #c96f4a;
+    --font: "Inter", "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--studio); color: var(--ink); font-family: var(--font); }
+  body { min-height: 100vh; -webkit-font-smoothing: antialiased; font-feature-settings: "tnum" 1, "cv11" 1; }
+  button { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--mustard); outline-offset: 2px; }
+
+  /* the single WebGL canvas sits ABOVE the page (pointer-events: none) and draws into each stage via scissor */
+  #gl { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 30; display: block; }
+
+  header.top {
+    position: sticky; top: 0; z-index: 20; background: var(--studio);
+    padding: 18px clamp(16px, 3vw, 32px) 0; border-bottom: 1px solid var(--line);
+  }
+  .titlebar { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px; }
+  h1 { margin: 0; font-size: clamp(22px, 3vw, 30px); font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; }
+  .lede { margin: 6px 0 0; color: var(--muted); font-size: 14px; line-height: 1.45; max-width: 62ch; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .btn {
+    appearance: none; border: 1px solid var(--line); background: rgba(235, 229, 214, 0.05); color: var(--ink);
+    padding: 8px 12px; border-radius: 4px; font-size: 13px; font-weight: 600; cursor: pointer; text-decoration: none; white-space: nowrap;
+  }
+  .btn:hover { background: rgba(235, 229, 214, 0.1); }
+  .btn.primary { background: var(--teal-deep); border-color: var(--teal); }
+  .btn.primary:hover { background: var(--teal); }
+  .btn[disabled] { opacity: 0.5; cursor: progress; }
+
+  nav.tabs { display: flex; gap: 2px; margin-top: 16px; overflow-x: auto; scrollbar-width: none; }
+  nav.tabs::-webkit-scrollbar { display: none; }
+  .tab {
+    appearance: none; border: 0; background: transparent; color: var(--muted); cursor: pointer;
+    padding: 10px 14px 12px; font-size: 14px; font-weight: 600; position: relative; white-space: nowrap;
+  }
+  .tab .n { font-weight: 500; opacity: 0.7; margin-left: 4px; }
+  .tab:hover { color: var(--ink); }
+  /* signature: the active tab wears the RV livery — teal band with a mustard pinstripe */
+  .tab[aria-pressed="true"] { color: var(--ink); }
+  .tab[aria-pressed="true"]::after {
+    content: ""; position: absolute; left: 8px; right: 8px; bottom: 0; height: 6px;
+    background: linear-gradient(var(--teal) 0 3px, transparent 3px 4px, var(--mustard) 4px 6px);
+  }
+
+  main { padding: 20px clamp(16px, 3vw, 32px) 48px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
+  .card { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #2f2e2b; display: flex; flex-direction: column; }
+  .stage {
+    display: block; width: 100%; aspect-ratio: 4 / 3; border: 0; padding: 0; cursor: zoom-in;
+    background: radial-gradient(120% 90% at 50% 15%, var(--stage-top), var(--stage-bot) 70%);
+  }
+  .meta { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 8px; padding: 10px 12px 12px; border-top: 1px solid var(--line); }
+  .meta h3 { margin: 0; font-size: 14px; font-weight: 650; line-height: 1.25; }
+  .meta .kind { color: var(--muted); font-size: 12.5px; }
+  .meta .row { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
+  .stepper { display: inline-flex; align-items: center; gap: 2px; font-size: 12.5px; color: var(--muted); }
+  .stepper button { appearance: none; border: 1px solid var(--line); background: transparent; width: 26px; height: 24px; border-radius: 4px; cursor: pointer; line-height: 1; }
+  .stepper button:hover { background: rgba(235, 229, 214, 0.08); color: var(--ink); }
+  .stepper span { min-width: 58px; text-align: center; }
+  .linkbtn { appearance: none; border: 0; background: none; color: var(--muted); font-size: 12.5px; font-weight: 600; cursor: pointer; padding: 4px 0; white-space: nowrap; }
+  .linkbtn:hover { color: var(--mustard); }
+
+  /* inspector */
+  .inspector { position: fixed; inset: 0; z-index: 25; background: rgba(28, 27, 25, 0.96); display: none; }
+  .inspector.open { display: grid; grid-template-columns: 1fr minmax(280px, 340px); }
+  .inspector .view { position: relative; min-height: 0; background: radial-gradient(110% 80% at 45% 20%, #43423d, #2c2b28 75%); touch-action: none; }
+  .inspector aside { border-left: 1px solid var(--line); padding: 22px 22px 28px; overflow-y: auto; background: var(--studio); }
+  .inspector h2 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.015em; }
+  .inspector .kind { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .inspector dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 18px 0; font-size: 13.5px; }
+  .inspector dt { color: var(--muted); }
+  .inspector dd { margin: 0; }
+  .inspector h4 { margin: 20px 0 8px; font-size: 13px; font-weight: 650; color: var(--muted); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font-size: 12px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); background: rgba(79, 143, 138, 0.16); }
+  .chip.empty { background: transparent; color: var(--muted); }
+  .toggles { display: grid; gap: 8px; margin-top: 18px; font-size: 13.5px; }
+  .toggles label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+  .toggles input { accent-color: var(--mustard); width: 16px; height: 16px; }
+  .inspector .bar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+  .close { position: absolute; top: 12px; left: 12px; z-index: 2; }
+  .hint { position: absolute; left: 12px; bottom: 12px; color: var(--muted); font-size: 12px; z-index: 2; }
+  .note { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin-top: 18px; }
+
+  /* road / lineup view */
+  body.roadview header.top, body.roadview main { display: none; }
+  .roadui { display: none; }
+  body.roadview .roadui { display: flex; position: fixed; left: 12px; right: 12px; top: 12px; z-index: 40; gap: 8px; flex-wrap: wrap; align-items: center; }
+  body.roadview #roadpad { position: fixed; inset: 0; touch-action: none; }
+  .roadui .title { font-weight: 700; margin-right: 8px; text-shadow: 0 1px 2px rgba(0,0,0,0.4); }
+
+  /* sheet mode (doc images): no chrome, dense grid, name only */
+  body.sheet header.top { display: none; }
+  body.sheet main { padding: 14px; }
+  body.sheet .grid { grid-template-columns: repeat(8, 1fr); gap: 8px; }
+  body.sheet .meta { padding: 6px 8px 7px; grid-template-columns: 1fr; }
+  body.sheet .meta .kind, body.sheet .meta .row { display: none; }
+  body.sheet .meta h3 { font-size: 12.5px; font-weight: 600; }
+
+  .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 45; background: #3a3935; border: 1px solid var(--line); padding: 10px 14px; border-radius: 4px; font-size: 13px; display: none; }
+  .toast.show { display: block; }
+
+  @media (max-width: 720px) {
+    .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+    .meta { padding: 8px 10px 10px; }
+    .stepper span { min-width: 40px; }
+    .stepper button { width: 22px; }
+    .meta .kind { display: none; }
+    .meta .row { flex-wrap: wrap; row-gap: 2px; }
+    .meta { overflow: hidden; }
+    .inspector.open { grid-template-columns: 1fr; grid-template-rows: 56vh 1fr; }
+    .inspector aside { border-left: 0; border-top: 1px solid var(--line); padding: 16px; }
+    .lede { font-size: 13px; }
+  }
+</style>
+</head>
+<body>
+<canvas id="gl" aria-hidden="true"></canvas>
+
+<header class="top">
+  <div class="titlebar">
+    <div>
+      <h1>Cook &amp; Run — Asset Kit</h1>
+      <p class="lede" id="lede">Every model in the game, built from code. Click one to inspect its named parts or export it as .glb for Unity.</p>
+    </div>
+    <div class="actions">
+      <a class="btn" href="?view=road">Road test</a>
+      <button class="btn" id="pause" type="button" aria-pressed="false">Pause turntables</button>
+      <button class="btn primary" id="exportCat" type="button">Export category</button>
+    </div>
+  </div>
+  <nav class="tabs" id="tabs" aria-label="Asset categories"></nav>
+</header>
+
+<main>
+  <div class="grid" id="grid"></div>
+</main>
+
+<section class="inspector" id="inspector" aria-modal="true" role="dialog" aria-labelledby="insTitle">
+  <div class="view" id="insView">
+    <button class="btn close" id="insClose" type="button">Close</button>
+    <div class="hint">Drag to orbit, scroll or pinch to zoom.</div>
+  </div>
+  <aside>
+    <h2 id="insTitle">—</h2>
+    <div class="kind" id="insKind"></div>
+    <div class="stepper" id="insStepper" style="margin-top:14px"></div>
+    <dl id="insStats"></dl>
+    <h4>Named parts</h4>
+    <div class="chips" id="insParts"></div>
+    <div class="toggles">
+      <label><input type="checkbox" id="optAnim"> Animate named parts</label>
+      <label><input type="checkbox" id="optPoints"> Show attachment points</label>
+      <label><input type="checkbox" id="optSpin"> Turntable</label>
+    </div>
+    <div class="bar">
+      <button class="btn primary" id="insExport" type="button">Export .glb</button>
+    </div>
+    <p class="note" id="insNote"></p>
+  </aside>
+</section>
+
+<div class="roadui">
+  <span class="title">Road test</span>
+  <button class="btn" data-cam="chase" type="button">Chase camera</button>
+  <button class="btn" data-cam="side" type="button">Side</button>
+  <button class="btn" data-cam="high" type="button">High</button>
+  <button class="btn" data-biome="town" type="button">Town</button>
+  <button class="btn" data-biome="desert" type="button">Desert</button>
+  <a class="btn" href="assets.html">Back to the kit</a>
+</div>
+<div id="roadpad"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script type="module" src="./js/assets/showroom.js"></script>
+</body>
+</html>

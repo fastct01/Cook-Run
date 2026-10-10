@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Cook &amp; Run — lobby harness</title>
+  <link rel="stylesheet" href="./css/lobby.css">
+  <style>
+    html, body { margin: 0; height: 100%; background: #22262a; color: #f1ead8; font: 15px/1.45 system-ui, sans-serif; }
+    #game { padding: 24px; }
+    #game h1 { font: 700 28px/1.1 system-ui, sans-serif; margin: 0 0 12px; }
+    #out { white-space: pre-wrap; background: #2b3035; padding: 12px; border-radius: 8px; max-width: 720px; }
+    #game button { font: inherit; padding: 8px 14px; margin: 12px 8px 0 0; border-radius: 8px; border: 0; background: #d9a83a; color: #22262a; font-weight: 700; cursor: pointer; }
+    #relay { margin-top: 12px; color: #a7c7d6; }
+  </style>
+</head>
+<body>
+  <!-- Test harness for public/js/ui/lobby.js (used by scripts/test-net.mjs, handy for manual checks).
+       Open http://localhost:3000/net-test.html in two tabs. ?room=CODE prefills Join. -->
+  <div id="lobby-root"></div>
+  <div id="game" hidden>
+    <h1>onStart fired</h1>
+    <pre id="out"></pre>
+    <div id="relay"></div>
+    <button type="button" id="ping-peer">Send test game msg</button>
+    <button type="button" id="back-room">Back to room</button>
+    <button type="button" id="back-title">Quit to title</button>
+  </div>
+  <script type="module">
+    import { showLobby } from './js/ui/lobby.js';
+    import { LocalBus } from './js/net/LocalBus.js';
+
+    const root = document.getElementById('lobby-root');
+    const game = document.getElementById('game');
+    const out = document.getElementById('out');
+    const relay = document.getElementById('relay');
+    let net = null;
+    let offGame = null;
+    window.__starts = [];
+    window.__game = [];
+
+    function onStart(p) {
+      net = p.net;
+      const summary = { mode: p.mode, role: p.role, seed: p.seed, roomCode: p.roomCode, you: p.you, isHost: p.isHost, players: p.players, net: p.net ? 'NetClient' : null };
+      window.__starts.push(summary);
+      out.textContent = JSON.stringify(summary, null, 2);
+      document.title = `START ${p.mode} ${p.role} ${p.seed}`;
+      game.hidden = false;
+      if (offGame) offGame();
+      if (p.mode === 'solo') {
+        const [a, b] = LocalBus.pair();
+        b.onGame((m) => { window.__game.push(m); relay.textContent = 'LocalBus got: ' + JSON.stringify(m); });
+        a.sendGame({ k: 'chat', text: 'solo hello' });
+      } else {
+        offGame = net.onGame((m, from) => { window.__game.push(m); relay.textContent = `from ${from}: ${JSON.stringify(m).slice(0, 120)}`; });
+        net.on('peerLeft', () => { relay.textContent = 'Partner left.'; });
+        net.on('close', (i) => { if (!i.intentional) relay.textContent = 'Connection lost.'; });
+      }
+    }
+
+    document.getElementById('ping-peer').onclick = () => net && net.sendGame({ k: 'chat', text: 'COPS!' });
+    document.getElementById('back-room').onclick = () => {
+      game.hidden = true;
+      if (offGame) { offGame(); offGame = null; }
+      showLobby(root, { onStart, net, resumeRoom: true });
+    };
+    document.getElementById('back-title').onclick = () => {
+      game.hidden = true;
+      if (offGame) { offGame(); offGame = null; }
+      showLobby(root, { onStart, net });
+      net = null;
+    };
+
+    window.__lobby = showLobby(root, { onStart });
+  </script>
+</body>
+</html>

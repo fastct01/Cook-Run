@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cook &amp; Run — entities test</title>
+<link rel="icon" href="data:,">
+<style>
+  html, body { margin: 0; height: 100%; background: #22262a; overflow: hidden; font: 600 12px/1.3 system-ui, sans-serif; color: #f1ead8; }
+  #view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #bar { position: fixed; left: 8px; top: 8px; z-index: 5; display: flex; gap: 4px; flex-wrap: wrap; max-width: 92vw; }
+  #bar a { color: #d9a83a; text-decoration: none; padding: 3px 6px; border-radius: 4px; background: rgba(0,0,0,.45); }
+  #bar a.on { background: #d9a83a; color: #22262a; }
+  #info { position: fixed; left: 8px; bottom: 8px; z-index: 5; padding: 5px 8px; border-radius: 6px; background: rgba(0,0,0,.5); font-variant-numeric: tabular-nums; max-width: 70vw; }
+  body.shot #bar { display: none; }
+  body.shot #info { display: none; }
+</style>
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="bar"></div>
+<div id="info">loading…</div>
+<script type="module">
+// Entities harness (VIEW-WORLD-B). ?scene=zoo|rhino|tornado|steam|roof|parade|comet|west|farm|highway
+//   zoo: &station=0..11 (−1 = overview). &cam=side|close (rhino / tornado). &t=<start s>. &dt=<fixed step>.
+//   &noents=1 → same scene without entities (draw-call baseline). &shot=1 hides the scene bar.
+//   ?sim=1&z=36200 → the REAL GameSim + autopilot, teleported to z (tornado set-piece once SETPIECES ships it).
+// window.__ents (EntityView), __view, __snap(), __stats(), __advance(sec, dt), __focus(station), __ready, __settled()
+import * as THREE from 'three';
+import { loadData } from './js/data/loadData.js';
+import { WorldView } from './js/render/WorldView.js';
+import { makeScene, SCENES } from './js/render/ents/testScenes.js';
+
+const q = new URLSearchParams(location.search);
+const sceneName = q.get('scene') || 'zoo';
+const useSim = q.get('sim') === '1';
+if (q.has('shot')) document.body.classList.add('shot');
+const info = document.getElementById('info');
+const data = await loadData();
+const seed = q.has('seed') ? +q.get('seed') : data.route.defaultSeed;
+const canvas = document.getElementById('view');
+const view = new WorldView(canvas, data, { seed, role: 'driver' });
+await view.ready;
+window.__view = view;
+window.__ents = view.entities;
+
+const bar = document.getElementById('bar');
+const link = (s) => { const u = new URLSearchParams(q); u.delete('sim'); u.set('scene', s); if (s !== 'zoo') u.delete('station'); return '?' + u; };
+bar.innerHTML = SCENES.map((s) => `<a href="${link(s)}" class="${!useSim && s === sceneName ? 'on' : ''}">${s}</a>`).join('') +
+  `<a href="?sim=1&z=36200" class="${useSim ? 'on' : ''}">real sim (tornado)</a>` +
+  (sceneName === 'zoo' && !useSim ? [...Array(12)].map((_, i) => `<a href="${(() => { const u = new URLSearchParams(q); u.set('station', i); return '?' + u; })()}" class="${+q.get('station') === i && q.has('station') ? 'on' : ''}">#${i}</a>`).join('') : '');
+
+let T = q.has('t') ? +q.get('t') : 0;
+let snapFn, camFn, label = '';
+let sim = null, ap = null;
+const tmpV = new THREE.Vector3(), tmpT = new THREE.Vector3();
+
+if (useSim) {
+  // ── the real sim, teleported ───────────────────────────────────────────
+  try {
+    const [{ GameSim }, { Autopilot }, veh] = await Promise.all([import('./js/sim/GameSim.js'), import('./js/sim/autopilot.js'), import('./js/sim/vehicle.js')]);
+    sim = new GameSim(data, { seed, solo: true });
+    try { sim.applyDriverCommand && sim.applyDriverCommand({ type: 'skipTutorial' }); } catch (e) { console.warn(e); }
+    const z = q.has('z') ? +q.get('z') : 36200;
+    sim.phase = 'drive'; sim.countdown = 0;
+    if (veh.placeRv) { const u = veh.forwardLaneU ? veh.forwardLaneU(sim.road, z) : 1.8; veh.placeRv(sim, z, u); }
+    else { sim.rv.z = z; sim.rv.x = sim.track.xAt(z, 1.8); }
+    if (sim.traffic) sim.traffic.frontier = z + 300;
+    if (sim.peds) sim.peds.frontier = z + 300;
+    if (q.has('stars') && sim.heat) { sim.heat.value = +q.get('stars') + 0.5; sim.heat.stars = +q.get('stars'); sim.heat.decayDelayT = 1e9; }
+    window.__holdStars = q.has('stars') ? +q.get('stars') + 0.5 : null;
+    ap = new Autopilot(data, { seed, maxSpeed: q.has('speed') ? +q.get('speed') : 16 });
+    let snap = sim.snapshot();
+    label = `REAL SIM from z=${z}`;
+    snapFn = () => snap;
+    window.__simStep = (dt) => {
+      const n = Math.max(1, Math.round(dt * 60));
+      for (let i = 0; i < n; i++) { if (window.__holdStars != null && sim.heat) sim.heat.value = Math.max(sim.heat.value, window.__holdStars); const inp = ap.update(snap); sim.step(inp, 1 / 60); snap = sim.snapshot(); }
+      return snap;
+    };
+    const camMode = q.get('cam');
+    camFn = (t, s) => {
+      if (camMode === 'rhino') {
+        let rh = null; for (const e of s.ents) if (e[1] === 34) { rh = e; break; }   // KIND_ID.rhino_truck
+        const rv = s.rv;
+        if (!rh) return null;
+        return { pos: [rv.x - Math.sin(rv.yaw) * 7 + Math.cos(rv.yaw) * 4, 5, rv.z - Math.cos(rv.yaw) * 7 - Math.sin(rv.yaw) * 4], target: [rh[2], 1.6, rh[4]], fov: 55 };
+      }
+      if (camMode !== 'tornado') return null;
+      const tor = (s.setpieces || []).find((p) => p.type === 'tornado' && typeof p.x === 'number');
+      if (!tor) return null;
+      const rv = s.rv;
+      // behind the RV, offset away from the funnel, looking between the two (both stay in frame)
+      const dx = tor.x - rv.x, dz = tor.z - rv.z, d = Math.hypot(dx, dz) || 1;
+      const back = 16 + Math.min(30, d * 0.25), away = -Math.sign(dx * Math.cos(rv.yaw) - dz * Math.sin(rv.yaw) || 1) * 6;
+      const px = rv.x - Math.sin(rv.yaw) * back + Math.cos(rv.yaw) * away, pz = rv.z - Math.cos(rv.yaw) * back - Math.sin(rv.yaw) * away;
+      const k = Math.min(0.75, 40 / d);
+      return { pos: [px, 8 + Math.min(10, d * 0.05), pz], target: [rv.x + dx * (1 - k), 12 + Math.min(18, d * 0.1), rv.z + dz * (1 - k)], fov: 66 };
+    };
+    window.__sim = sim;
+  } catch (e) {
+    console.error('[ents-test] real sim unavailable', e);
+    label = 'real sim unavailable: ' + (e && e.message);
+  }
+}
+if (!snapFn) {
+  const sc = makeScene(sceneName, data, view.track, { station: q.has('station') ? +q.get('station') : null, cam: q.get('cam'), z: q.has('z') ? +q.get('z') : undefined });
+  if (!sc) throw new Error('unknown scene ' + sceneName);
+  label = sceneName + (sc.label && q.has('station') ? ` #${q.get('station')}: ${sc.label(+q.get('station'))}` : '');
+  snapFn = (t) => sc.snapshot(t);
+  camFn = (t) => sc.camera(t);
+  window.__scene = sc;
+  window.__focus = (i) => { const nu = new URLSearchParams(q); nu.set('station', i); location.search = nu; };
+}
+const noEnts = q.get('noents') === '1';
+let curSnap = null;
+
+function step(dt, draw = true) {
+  T += dt;
+  let snap = sim ? window.__simStep(dt) : snapFn(T);
+  if (noEnts) snap = { ...snap, ents: [] };
+  curSnap = snap;
+  view.pushSnapshot(snap, { interpolate: false });
+  const c = window.__camOverride || (camFn && camFn(T, snap));
+  if (c) {
+    if (view.cameraMode !== 'cinematic') view.setCamera('cinematic');
+    view.setCinematic({ pos: tmpV.set(...c.pos), target: tmpT.set(...c.target), fov: c.fov, orbit: false });
+  } else if (view.cameraMode !== 'chase') view.setCamera('chase');
+  view.render(dt, { draw });
+}
+const fixedDt = q.has('dt') ? +q.get('dt') : null;
+window.__advance = (sec, dt = 1 / 30) => { const n = Math.max(1, Math.round(sec / dt)); for (let i = 0; i < n; i++) step(dt, i === n - 1); return window.__stats(); };
+window.__snap = () => curSnap;
+// close-up helper: __look(entKind | [x,y,z], dist, height) puts the camera next to the first ent of that kind
+window.__look = (what, dist = 6, h = 2.5, side = 1) => {
+  let t;
+  if (Array.isArray(what)) t = what;
+  else { for (const r of view.entities.map.values()) if (r.kind === what && r.inst.outer.visible) { t = [r.x, r.y + 1, r.z]; break; } }
+  if (!t) return null;
+  window.__camOverride = { pos: [t[0] + dist * 0.7 * side, t[1] + h, t[2] - dist * 0.7], target: t, fov: 50 };
+  return t;
+};
+window.__settled = () => view.isSettled();
+window.__stats = () => {
+  const s = view.stats, e = view.entities;
+  return { calls: s.calls, tris: s.triangles, ents: e.visibleCount, particles: s.particles, T: +T.toFixed(2), kinds: Object.fromEntries(Object.entries(e.kindCount).filter(([, v]) => v)) };
+};
+window.__paused = q.has('pause');
+let last = performance.now();
+function frame(now) {
+  const dt = fixedDt ?? Math.min(0.1, (now - last) / 1000);
+  last = now;
+  if (!window.__paused) step(dt);
+  if (Math.floor(now / 300) !== Math.floor((now - dt * 1000) / 300)) {
+    const s = window.__stats();
+    info.textContent = `${label} · t ${s.T}s · calls ${s.calls} · tris ${(s.tris / 1000).toFixed(0)}k · ents ${s.ents} · fx ${s.particles}`;
+  }
+  requestAnimationFrame(frame);
+}
+step(1 / 30);
+window.__ready = true;
+requestAnimationFrame(frame);
+addEventListener('keydown', (e) => { if (e.code === 'KeyP') window.__paused = !window.__paused; });
+</script>
+</body>
+</html>

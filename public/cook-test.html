@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Cook Lab — test bench</title>
+  <link rel="stylesheet" href="./css/cook.css">
+  <style>
+    html, body { margin: 0; height: 100%; background: #111315; color: #f1ead8; font-family: Inter, system-ui, sans-serif; overflow: hidden; }
+    #host { position: fixed; inset: 0; }
+    body.compact #host { inset: auto 16px 16px auto; width: 520px; height: 400px; max-width: calc(100vw - 32px); max-height: calc(100vh - 80px); border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+    body.compact { background: linear-gradient(#a8bfc7, #d8c4a0 55%, #8a7a5e 56%, #5b5750 80%); }
+    #dev {
+      position: fixed; left: 8px; top: 8px; z-index: 50; display: none; gap: 6px; flex-wrap: wrap; align-items: center;
+      padding: 6px 8px; border-radius: 8px; background: rgba(0,0,0,.72); font-size: 12px;
+    }
+    body.dev #dev { display: flex; }
+    #dev button { font: inherit; padding: 4px 8px; border-radius: 6px; border: 0; background: #343a3f; color: #f1ead8; cursor: pointer; }
+    #dev label { display: flex; align-items: center; gap: 4px; }
+    #dev-toggle { position: fixed; left: 8px; bottom: 8px; z-index: 51; font: 700 11px Inter, sans-serif; padding: 4px 8px; border-radius: 6px; border: 0; background: rgba(0,0,0,.6); color: #cfc7b3; cursor: pointer; }
+    body.compact #dev-toggle { bottom: auto; top: 8px; left: auto; right: 8px; }
+    body.shots #dev-toggle { display: none; }
+    #drive-hint { position: fixed; left: 24px; top: 24px; display: none; font: 800 18px Inter, sans-serif; color: #22262a; opacity: .8; }
+    body.compact #drive-hint { display: block; }
+  </style>
+  <script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+</head>
+<body>
+  <div id="drive-hint">(the driver's 3D view would be here — WASD keeps working)</div>
+  <div id="host"></div>
+  <button id="dev-toggle" type="button" tabindex="-1">dev</button>
+  <div id="dev">
+    <button data-act="compact" tabindex="-1">toggle compact</button>
+    <button data-act="bump" tabindex="-1">bump</button>
+    <button data-act="cop" tabindex="-1">cop alongside</button>
+    <button data-act="fire" tabindex="-1">start fire</button>
+    <button data-act="down" tabindex="-1">knock out cook</button>
+    <button data-act="stock" tabindex="-1">restock</button>
+    <label><input type="checkbox" data-act="feel" checked tabindex="-1"> road feel</label>
+    <label><input type="checkbox" data-act="copcycle" checked tabindex="-1"> cop cycle</label>
+  </div>
+  <script type="module">
+    import { loadData } from './js/data/loadData.js';
+    import { CookLab } from './js/cook/CookLab.js';
+    import { CookUI } from './js/cook/CookUI.js';
+    import { CMD, EV } from './js/shared/protocol.js';
+
+    const qs = new URLSearchParams(location.search);
+    const compact = qs.get('compact') === '1';
+    if (compact) document.body.classList.add('compact');
+    if (qs.get('dev') === '1') document.body.classList.add('dev');
+    if (qs.get('shots') === '1') document.body.classList.add('shots');
+
+    const data = await loadData();
+
+    // ── fake host ───────────────────────────────────────────────────────────
+    const host = {
+      t: 0,
+      inv: { mat: {}, units: 0, quality: 0, gadgets: { smoke: 0, oil: 1, nitro: 0 } },
+      crew: { driver: 100, cook: 100 },
+      events: [],
+      commands: [],
+      feelOn: qs.get('feel') !== '0',
+      copCycle: qs.get('cop') !== '0',
+      copForce: null,
+      bumpAt: -1,
+      cookDownFor: 0,
+      pending: new Map(),
+      approveMs: 150,
+    };
+    function restock() {
+      const mat = { ...data.lab.startInventory };
+      for (const id of Object.keys(data.lab.ingredients)) mat[id] = (mat[id] || 0) + 2;
+      host.inv.mat = mat;
+    }
+    restock();
+    if (qs.get('empty') === '1') host.inv.mat = { salts: 1, solvent: 0, fuel: 0 };
+
+    function sendCommand(cmd) {
+      host.commands.push(cmd);
+      console.log('[cook→host]', JSON.stringify(cmd));
+      switch (cmd.type) {
+        case CMD.START_RECIPE: {
+          const r = data.lab.recipes.find((x) => x.id === cmd.recipeId);
+          const mat = host.inv.mat;
+          const ok = r && Object.entries(r.needs).every(([k, n]) => (mat[k] || 0) >= n);
+          if (host.approveMs < 0) return; // simulate a dead host
+          setTimeout(() => {
+            if (ok) {
+              for (const [k, n] of Object.entries(r.needs)) mat[k] -= n;
+              host.pending.set(cmd.reqId, r);
+              host.events.push({ type: EV.RECIPE_OK, reqId: cmd.reqId, recipeId: cmd.recipeId });
+            } else host.events.push({ type: EV.RECIPE_DENIED, reqId: cmd.reqId, recipeId: cmd.recipeId, reason: 'not enough ingredients' });
+          }, host.approveMs);
+          break;
+        }
+        case CMD.RECIPE_DONE: {
+          const r = host.pending.get(cmd.reqId) || data.lab.recipes.find((x) => x.id === cmd.recipeId);
+          host.pending.delete(cmd.reqId);
+          if (r.kind === 'product') {
+            const u0 = host.inv.units, u1 = u0 + r.units;
+            host.inv.quality = u1 ? (host.inv.quality * u0 + cmd.quality * r.units) / u1 : 0;
+            host.inv.units = u1;
+          } else if (r.kind === 'gadget') host.inv.gadgets[r.gadget] = (host.inv.gadgets[r.gadget] || 0) + 1;
+          else if (r.repair?.crew) host.crew.cook = Math.min(100, host.crew.cook + r.repair.crew);
+          host.events.push({ type: EV.MSG, text: `${r.name} done`, tone: 'good' });
+          break;
+        }
+        case CMD.RECIPE_FAIL: host.pending.delete(cmd.reqId); break;
+        case CMD.EXPLOSION: host.crew.cook = Math.max(0, host.crew.cook - (data.lab.hazards.explosion?.cookDamage ?? 30)); break;
+        default: break;
+      }
+    }
+
+    const lab = new CookLab(data, { sendCommand });
+    const ui = new CookUI(lab, document.getElementById('host'), { compact });
+    window.__cook = { lab, ui, host, data, CMD, EV };
+
+    function makeSnapshot() {
+      const t = host.t;
+      let latAcc = 0, bump = 0;
+      if (host.feelOn) {
+        latAcc = Math.sin(t * 0.9) * 4 * (0.6 + 0.4 * Math.sin(t * 0.23));
+        // occasional bumps: ~every 9 s, plus a manual one
+        const ph = t % 9;
+        if (ph > 6.2 && ph < 6.42) bump = 0.7;
+      }
+      if (host.bumpAt >= 0 && t - host.bumpAt < 0.2) bump = Math.max(bump, 0.85);
+      const copClose = host.copForce !== null ? host.copForce : host.copCycle ? Math.floor(t / 10) % 2 === 1 : false;
+      // cook damage from the lab
+      const ls = lab.getLabState();
+      host.crew.cook = Math.max(0, host.crew.cook - ls.cookHurt);
+      if (host.cookDownFor > 0) { host.cookDownFor -= 1 / 15; if (host.cookDownFor <= 0) host.crew.cook = Math.max(host.crew.cook, 25); }
+      else if (host.crew.cook <= 0) host.cookDownFor = 12;
+      const s = {
+        t, phase: 'drive',
+        inv: JSON.parse(JSON.stringify(host.inv)),
+        feel: { latAcc, bump, speed: 22 },
+        alert: { copClose, copDist: copClose ? 6 : 140 },
+        crew: { ...host.crew, cookDown: host.cookDownFor > 0 },
+        rv: { hp: 80 },
+        lab: { fumes: ls.fumes, fire: ls.fire, ventOpen: ls.ventOpen, curtains: ls.curtains, cooking: ls.cooking },
+        events: host.events.splice(0),
+      };
+      return s;
+    }
+
+    let snapAcc = 0;
+    let last = performance.now();
+    function frame(now) {
+      const dt = Math.min(0.1, (now - last) / 1000);
+      last = now;
+      host.t += dt;
+      snapAcc += dt;
+      if (snapAcc >= 1 / 15) { snapAcc %= 1 / 15; lab.applySnapshot(makeSnapshot()); }
+      lab.update(dt);
+      ui.update(dt);
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+
+    // dev panel
+    document.getElementById('dev-toggle').addEventListener('click', () => document.body.classList.toggle('dev'));
+    document.getElementById('dev').addEventListener('click', (e) => {
+      const a = e.target.dataset.act;
+      if (a === 'compact') {
+        const on = !document.body.classList.contains('compact');
+        document.body.classList.toggle('compact', on);
+        ui.setCompact(on);
+      } else if (a === 'bump') host.bumpAt = host.t;
+      else if (a === 'cop') host.copForce = host.copForce ? null : true;
+      else if (a === 'fire') lab.startFire(0.25, 'test');
+      else if (a === 'down') host.crew.cook = 0;
+      else if (a === 'stock') restock();
+    });
+    document.getElementById('dev').addEventListener('change', (e) => {
+      const a = e.target.dataset.act;
+      if (a === 'feel') host.feelOn = e.target.checked;
+      if (a === 'copcycle') host.copCycle = e.target.checked;
+    });
+  </script>
+</body>
+</html>

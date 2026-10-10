@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cook &amp; Run — roof defence test</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/hud.css">
+<link rel="stylesheet" href="css/van.css">
+<style>
+  html, body { margin: 0; height: 100%; background: #22262a; overflow: hidden; }
+  #stage { position: fixed; inset: 0; }
+  #view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #hudroot { position: absolute; inset: 0; pointer-events: none; }
+  #dbg { position: fixed; left: 50%; bottom: 0; transform: translateX(-50%); z-index: 20; display: flex; gap: 4px; flex-wrap: wrap; justify-content: center;
+         font: 600 11px/1 system-ui, sans-serif; color: #f1ead8; padding: 4px 6px; background: rgba(34,38,42,.6); border-radius: 6px 6px 0 0; pointer-events: auto; }
+  #dbg a, #dbg button { color: #d9a83a; text-decoration: none; padding: 3px 5px; border-radius: 4px; background: rgba(0,0,0,.25); border: 0; font: inherit; cursor: pointer; }
+  #dbg a.on { background: #d9a83a; color: #22262a; }
+  #dbg span { padding: 3px 4px; opacity: .8; font-variant-numeric: tabular-nums; }
+  body.shot #dbg { display: none; }
+</style>
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+</head>
+<body>
+<div id="stage">
+  <canvas id="view" tabindex="-1"></canvas>
+  <div id="hudroot"></div>
+</div>
+<div id="dbg"></div>
+<script type="module">
+// Harness for Doc's ROOF DEFENCE (Agent ROOF): WorldView (cook role) + CookLab + VanLab3D with its roof mode,
+// driven by a MockStopSim (RV parked in a supply-stop lot, cops approaching, the real sim/roof.js inside).
+//   roof-test.html                 stop starts at once; press R (or click the hatch / banner) → Doc climbs up
+//   ?solo=1                        the solo AI defender (sim/roof.js AI) + the roof camera following it
+//   ?sim=1                         the real GameSim (SIM-CORE): autopilot to the first stop headless, then park
+//   ?shop=40  ?cops=3  ?copSpeed=6  ?auto=0 (start the stop with the button)  ?up=1 (climb at once)
+//   ?stop=hardware|market|…        which stop lot  ?smoke=2  ?oil=1   ?shot=1 (hide this bar)  ?dt=0.033
+//   ?manual=1                      no real-time loop: drive it with __roof.advance(sec) (screenshots)
+// window.__roof = { van, client, host, sim, roof, view, lab, advance(sec), key(code, down), aimAt(x, z), aimCop(i),
+//                   spray(on), throw(device), climb(), down(), startStop(), finishShop(), addCops(n), stats(), settled() }
+import { loadData } from './js/data/loadData.js';
+import { WorldView } from './js/render/WorldView.js';
+import { CookLab } from './js/cook/CookLab.js';
+import { CMD, EV, KIND_ID, DCMD } from './js/shared/protocol.js';
+import { VanLab3D } from './js/van/VanLab3D.js';
+import { MockStopSim } from './js/van/roof/mockStopSim.js';
+import { rvToWorld } from './js/sim/roof.js';
+
+const q = new URLSearchParams(location.search);
+if (q.has('shot')) document.body.classList.add('shot');
+const solo = q.get('solo') === '1';
+const useSim = q.get('sim') === '1';
+const data = await loadData();
+const seed = q.has('seed') ? +q.get('seed') : data.route.defaultSeed ?? 1;
+const canvas = document.getElementById('view');
+const hudRoot = document.getElementById('hudroot');
+const view = new WorldView(canvas, data, { seed, role: 'cook' });
+let hud = null;
+try { const { Hud } = await import('./js/ui/hud.js'); hud = new Hud(hudRoot, data, { role: 'cook' }); } catch (e) { console.warn('[roof-test] hud unavailable', e && e.message); }
+
+// ── host: MockStopSim (default) or the real GameSim ─────────────────────────
+const stopDef = data.route.stops.find((s) => s.id === q.get('stop')) || data.route.stops[0];
+const { Track } = await import('./js/sim/track.js');
+const track = new Track(data.route, seed);
+let host = null, sim = null, ap = null;
+const labInv = { mat: {}, units: 2, quality: 0.7, gadgets: { smoke: q.has('smoke') ? +q.get('smoke') : 2, oil: q.has('oil') ? +q.get('oil') : 1, nitro: 0 } };
+for (const id of Object.keys(data.lab.ingredients)) labInv.mat[id] = (data.lab.startInventory[id] || 0) + 2;
+const fakeLabEvents = [];
+
+if (useSim) {
+  const { GameSim } = await import('./js/sim/GameSim.js');
+  const { Autopilot } = await import('./js/sim/autopilot.js');
+  sim = new GameSim(data, { seed, solo });
+  ap = new Autopilot(data, { seed });
+  try { sim.applyDriverCommand && sim.applyDriverCommand({ type: DCMD.SKIP_TUTORIAL }); } catch (e) { /* older sim */ }
+} else {
+  // parked in the lot, near the road edge (the shop is behind it, on the driver's side)
+  const z = stopDef.z + 4, yaw = track.headingAt(z);
+  const u = stopDef.side * (track.halfWidth(z) + track.shoulder(z) + 3.0);
+  host = new MockStopSim(data.rules, {
+    seed, solo, rv: { x: track.xAt(z, u), z, yaw }, copSpeed: q.has('copSpeed') ? +q.get('copSpeed') : 6,
+    stop: { id: stopDef.id, name: stopDef.name, shopType: stopDef.shop?.type, loadTime: stopDef.loadTime ?? 2.5 }, gadgets: labInv.gadgets,
+  });
+  host.inv.gadgets = labInv.gadgets;
+}
+
+function sendCommand(cmd) {
+  if (sim) { sim.applyCookCommand(cmd); return; }
+  if (String(cmd.type).startsWith('roof')) { host.roof.command(cmd); return; }
+  if (cmd.type === CMD.START_RECIPE) {
+    const r = data.lab.recipes.find((x) => x.id === cmd.recipeId);
+    const ok = r && Object.entries(r.needs).every(([k, n]) => (labInv.mat[k] || 0) >= n);
+    if (ok) { for (const [k, n] of Object.entries(r.needs)) labInv.mat[k] -= n; fakeLabEvents.push({ type: EV.RECIPE_OK, reqId: cmd.reqId, recipeId: cmd.recipeId }); }
+    else fakeLabEvents.push({ type: EV.RECIPE_DENIED, reqId: cmd.reqId, recipeId: cmd.recipeId, reason: 'not enough ingredients' });
+  }
+}
+const lab = new CookLab(data, { sendCommand, seed });
+const van = new VanLab3D(view, lab, data, { canvas, hudRoot, role: 'cook', sendCommand, roofSpectate: solo });
+van.setActive(true);
+
+// ── cops ────────────────────────────────────────────────────────────────────
+function addCops(n = 3) {
+  if (!host) return;
+  const rv = host.rv, z0 = rv.z;
+  const lanes = (z, fwd) => track.xAt(z, track.laneU(z, Math.max(0, Math.min(track.lanesAt(z) - 1, fwd ? Math.floor(track.lanesAt(z) / 2) : 0))));
+  const spots = [
+    { x: lanes(z0 - 64, true), z: z0 - 64, kind: 'cop' },
+    { x: lanes(z0 + 72, false), z: z0 + 72, kind: 'cop_suv' },
+    { ...rvToWorld(rv, stopDef.side * 44, -26), kind: 'cop' },
+    { x: lanes(z0 - 95, true), z: z0 - 95, kind: 'moto_cop' },
+    { ...rvToWorld(rv, stopDef.side * 40, 50), kind: 'interceptor' },
+  ];
+  for (let i = 0; i < n; i++) { const s = spots[(host.cops.length) % spots.length]; host.addCop({ x: s.x + (i > 4 ? i : 0), z: s.z - (i > 4 ? 20 * i : 0), kind: KIND_ID[s.kind] != null ? s.kind : 'cop' }); }
+}
+
+// ── snapshots ───────────────────────────────────────────────────────────────
+let T = 0, acc = 0, lastSend = -1, lastSnap = null;
+function mockSnap() {
+  const h = host, rv = h.rv;
+  const ents = h.cops.map((c) => [c.id, KIND_ID[c.kind] ?? KIND_ID.cop, +c.x.toFixed(3), 0, +c.z.toFixed(3), +c.yaw.toFixed(4), 0, c.state]);
+  const near = h.cops.reduce((m, c) => Math.min(m, Math.hypot(c.x - rv.x, c.z - rv.z)), 999);
+  const stop = h.stopSnapshot();
+  const ls = lab.getLabState();
+  const evs = h.drainEvents().concat(fakeLabEvents.splice(0));
+  return {
+    t: h.t, phase: 'drive', countdown: 0, lostReason: null,
+    rv: { x: rv.x, y: 0, z: rv.z, yaw: rv.yaw, pitch: 0, roll: 0, speed: rv.speed, steer: 0, hp: 88, airborne: false, nitro: 0, flatTyre: false, onRoad: false, zone: 'lot', regen: false, roofDoc: h.roof.roofDoc },
+    crew: { driver: 96, cook: 90, cookDown: false },
+    heat: { value: 2.4, stars: 2, seen: true, gaveUp: false }, bust: h.bust,
+    score: { points: 1200, chaos: 3, knocked: 1, smashed: 4, copsWrecked: 0 },
+    inv: JSON.parse(JSON.stringify(labInv)),
+    stop, roof: h.roof.state(), nearStop: null,
+    bridge: { dist: data.route.bridge.lip - rv.z, speedNeeded: data.route.bridge.minSpeedHint ?? 30 },
+    biome: track.biomeAt(rv.z).id, dist: rv.z, routeLength: data.route.routeLength,
+    feel: { latAcc: 0, bump: 0, speed: 0 }, alert: { copClose: near < 9, copDist: near },
+    lab: { fumes: ls.fumes, fire: ls.fire, ventOpen: ls.ventOpen, curtains: ls.curtains, cooking: ls.cooking },
+    timeOfDay: 15.5, area: { id: track.biomeAt(rv.z).id, name: track.biomeAt(rv.z).name }, fx: { fog: 0, flash: 0, shock: 0 }, setpieces: [], garage: null,
+    ents, events: evs,
+  };
+}
+function step(dt, draw = true) {
+  T += dt;
+  if (sim) {
+    acc += dt;
+    let n = 0;
+    while (acc >= 1 / 60 && n < 8) { sim.step(simInput(), 1 / 60); acc -= 1 / 60; n++; }
+    if (n === 8) acc = 0;
+    const s = sim.snapshot();
+    lastSnap = s;
+    view.pushSnapshot(s, { interpolate: false });
+    lab.applySnapshot(s);
+    hud && hud.update(s);
+  } else {
+    acc += dt;
+    let n = 0;
+    while (acc >= 1 / 60 && n < 8) { host.step(1 / 60); acc -= 1 / 60; n++; }
+    if (n === 8) acc = 0;
+    if (T - lastSend >= 1 / 15 || !lastSnap) {
+      lastSend = T;
+      const s = mockSnap();
+      lastSnap = s;
+      view.pushSnapshot(s, { interpolate: true });
+      lab.applySnapshot(s);
+      hud && hud.update(s);
+    }
+  }
+  lab.update(dt);
+  van.update(dt, lastSnap);
+  view.render(dt, { draw });
+}
+// real sim: autopilot drives until the RV is parked at a stop; the "shop" is finished after ?shop seconds
+let parkedAt = null;
+function simInput() {
+  const s = lastSnap || sim.snapshot();
+  const st = sim.stop;
+  if (st && st.state !== 'done') {
+    if (parkedAt == null) parkedAt = sim.time ?? sim.t;
+    if (st.state === 'shopping' && (sim.time ?? sim.t) - parkedAt > (q.has('shop') ? +q.get('shop') : 40)) sim.applyDriverCommand({ type: DCMD.SHOP_DONE, stopId: st.id, score: 0.9 });
+    return { throttle: 0, steer: 0, handbrake: true };
+  }
+  return ap.update(s);
+}
+
+// ── debug API ───────────────────────────────────────────────────────────────
+const key = (code, down = true) => van.onKey({ code, repeat: false, preventDefault() {} }, down);
+const R = window.__roof = {
+  van, view, lab, host, sim, get client() { return van.roof; }, get roof() { return sim ? sim.roof : host.roof; },
+  advance(sec, dt = 1 / 30) { const n = Math.max(1, Math.round(sec / dt)); for (let i = 0; i < n; i++) step(dt, i === n - 1); },
+  tick(sec, dt = 1 / 30) { const n = Math.max(1, Math.round(sec / dt)); for (let i = 0; i < n; i++) step(dt, false); },   // no GL draw (fast)
+  key,
+  climb() { return van.roof && van.roof.requestClimb(); },
+  down() { return van.roof && van.roof.requestDown(); },
+  aimAt(x, z) { van.roof && van.roof.aimAtWorld(x, z); },
+  aimCop(i = 0) { const s = lastSnap; const cops = (s?.ents || []).filter((e) => [KIND_ID.cop, KIND_ID.cop_suv, KIND_ID.interceptor, KIND_ID.moto_cop].includes(e[1])); const rv = s.rv; cops.sort((a, b) => Math.hypot(a[2] - rv.x, a[4] - rv.z) - Math.hypot(b[2] - rv.x, b[4] - rv.z)); const c = cops[i]; if (c) R.aimAt(c[2], c[4]); return c ? { id: c[0], x: c[2], z: c[4], d: Math.hypot(c[2] - rv.x, c[4] - rv.z) } : null; },
+  spray(on = true) { key('Space', on); },
+  /** aim (leading the cop by the throw's flight time) and throw `device` at the i-th nearest cop */
+  throwAtCop(i = 0, device = 'firecracker') {
+    const c = R.aimCop(i);
+    if (!c) return false;
+    let x = c.x, z = c.z;
+    const hc = host && host.cops.find((k) => k.id === c.id);
+    if (hc) { const T = 0.45 + 0.035 * c.d; x += Math.sin(hc.yaw) * hc.speed * T; z += Math.cos(hc.yaw) * hc.speed * T; }
+    van.roof.aimAtWorld(x, z, 0);
+    R.tick(1 / 30);
+    return R.throw(device);
+  },
+  throw(device) { if (van.roof) { van.roof.select(device); return van.roof.throwNow(); } return false; },
+  startStop(shop = q.has('shop') ? +q.get('shop') : 40) { host && host.startStop(shop); },
+  finishShop() { host && host.finishShop(); },
+  addCops,
+  stats() { const s = lastSnap; return { T: +T.toFixed(2), calls: view.stats.calls, tris: view.stats.triangles, docState: van.docState, client: van.roof?.state, stop: s?.stop ? { state: s.stop.state, progress: +(s.stop.progress || 0).toFixed(2), blocked: s.stop.blocked } : null, roof: s?.roof || s?.stop?.roof || null, cops: (s?.ents || []).filter((e) => e[1] <= 1 || e[1] >= KIND_ID.moto_cop && e[1] <= KIND_ID.interceptor).map((e) => [e[0], +Math.hypot(e[2] - s.rv.x, e[4] - s.rv.z).toFixed(1), e[7]]), busted: host?.busted ?? null, particles: view.stats.particles }; },
+  settled() { return view.isSettled() && van.built; },
+  pause(p = true) { paused = p; },
+};
+
+// ── loop ────────────────────────────────────────────────────────────────────
+let paused = q.get('manual') === '1', last = performance.now();
+const fixedDt = q.has('dt') ? +q.get('dt') : null;
+function frame(now) {
+  const dt = fixedDt ?? Math.min(0.1, (now - last) / 1000);
+  last = now;
+  if (!paused) step(dt);
+  if (stEl && Math.floor(now / 300) !== Math.floor((now - dt * 1000) / 300)) {
+    const s = R.stats();
+    stEl.textContent = `calls ${s.calls} · tris ${(s.tris / 1000).toFixed(0)}k · doc ${s.docState} · roof ${s.client?.mode ?? '-'} · stop ${s.stop?.state ?? '-'}${s.stop?.state === 'loading' ? ' ' + Math.round(s.stop.progress * 100) + '%' : ''} · busts ${s.busted ?? '-'}`;
+  }
+  requestAnimationFrame(frame);
+}
+addEventListener('keydown', (e) => {
+  if (van.onKey(e, true)) { e.preventDefault(); return; }
+  if (e.code === 'KeyP') paused = !paused;
+});
+addEventListener('keyup', (e) => { if (van.onKey(e, false)) e.preventDefault(); });
+addEventListener('resize', () => view.resize());
+
+const dbg = document.getElementById('dbg');
+const link = (k, v) => { const u = new URLSearchParams(q); if (v == null) u.delete(k); else u.set(k, v); return '?' + u.toString(); };
+dbg.innerHTML = `<a href="${link('solo', solo ? null : '1')}" class="${solo ? 'on' : ''}">solo AI</a><a href="${link('sim', useSim ? null : '1')}" class="${useSim ? 'on' : ''}">real sim</a>` +
+  `<button data-a="stop">stop</button><button data-a="shop">shop done</button><button data-a="cops">+cops</button><button data-a="climb">R climb</button><button data-a="down">down</button><span id="st"></span>`;
+const stEl = document.getElementById('st');
+dbg.addEventListener('mousedown', (e) => e.preventDefault());
+dbg.addEventListener('click', (e) => {
+  const a = e.target.dataset?.a;
+  if (a === 'stop') R.startStop();
+  if (a === 'shop') R.finishShop();
+  if (a === 'cops') addCops(2);
+  if (a === 'climb') R.climb();
+  if (a === 'down') R.down();
+});
+
+await van.ready;
+if (host) {
+  if (q.get('auto') !== '0') host.startStop(q.has('shop') ? +q.get('shop') : 40);
+  addCops(q.has('cops') ? +q.get('cops') : 3);
+}
+if (sim && q.has('skip')) {
+  // headless: let the autopilot drive to the first stop (or skip seconds)
+  const lim = +q.get('skip') * 60;
+  for (let i = 0; i < lim && !(sim.stop && sim.stop.state === 'shopping'); i++) { sim.step(simInput(), 1 / 60); if (i % 6 === 0) lastSnap = sim.snapshot(); }
+  lastSnap = sim.snapshot();
+}
+R.advance(0.2);
+if (q.get('up') === '1') R.climb();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
