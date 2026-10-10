@@ -180,6 +180,7 @@ export class VanLab3D {
     snap = this.lastSnap || {};
     const lab = this.lab, doc = this.doc;
     this._animateVehicle(dt, snap);
+    if (snap.rv && snap.rv.wrecked && this.hz && !this.hz.wreck) this.hz.wreckBlast();   // [wreck] the RV blew up
     if (this.roof) { try { this.roof.update(dt, snap); } catch (e) { console.error('[van] roof update', e); } }   // [roof hook]
     if (!this.active) return;
     if (this.roof && this.roof.ownsDoc) { this._updateRoofOwned(dt, snap); return; }

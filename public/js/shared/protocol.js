@@ -92,6 +92,7 @@ export const EV = Object.freeze({
   REGEN: 'regen',                // { type, on: bool }
   SETPIECE: 'setpiece',          // { type, id, kind, phase }     set-piece started/changed phase (HUD caption, audio)
   HEAT_DROP: 'heatDrop',         // { type, stars, reason }       e.g. car wash
+  RV_EXPLODE: 'rvExplode',       // { type, x, y, z, yaw }         the RV hit 0 hp and blew up (just before EV.END); snapshot rv.wrecked stays true
 });
 
 // Entity kind codes used in Snapshot.ents tuples. Keep in sync with assets registry.
@@ -118,7 +119,7 @@ World: Y up, road runs toward +Z, X is lateral. Forward of yaw θ = (sin θ, 0, 
   phase: 'garage'|'countdown'|'drive'|'won'|'lost',   // 'garage' = on-foot tutorial (expansion)
   countdown: number,            // seconds left in countdown
   lostReason: null|'wrecked'|'busted'|'crewDown'|'noProduct',
-  rv:   { x, y, z, yaw, pitch, roll, speed, steer, hp, airborne: bool, nitro: 0..1, flatTyre: bool, onRoad: bool },
+  rv:   { x, y, z, yaw, pitch, roll, speed, steer, hp, airborne: bool, nitro: 0..1, flatTyre: bool, onRoad: bool },   // + wrecked: true once blown up (only present then)
   crew: { driver: hp, cook: hp },
   heat: { value: 0..5.99, stars: 0..5, seen: bool, gaveUp: bool },
   bust: 0..1,

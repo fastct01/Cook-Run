@@ -18,8 +18,12 @@
 //     canvas click (option), else the mouse position relative to the screen centre.
 //   • Bob/sway from snap.feel + rv.pitch/roll, shakes on crashes/landings, nitro FOV kick.
 //   • Gauges: speed (0–100 mph), rpm from a simulated 3-speed automatic (gearbox.js, shared with the
-//     audio), temperature climbing when the hull is low / the lab is on fire. Wheel follows rv.steer
-//     (hands ride on it). Wipers sweep on fx.fog > 0.1 or in the dust storm.
+//     audio), temperature climbing when the hull is low / the lab is on fire, fuel draining along the
+//     route, odometer, PRNDL and warning lamps (cabInterior.js). Wheel follows rv.steer with a kick on
+//     bumps. Wipers sweep on fx.fog > 0.1 or in the dust storm.
+//   • Cab dressing + worn materials + a new 3-spoke wheel (cabInterior.js / cabMaterials.js) and
+//     Rook's IK arms whose hands grip the rim, shuffle at full lock, hit the horn and reach for the
+//     column shifter (cabArms.js).
 //   • Live mirrors (mirrors.js) through view.addPreRender at ~20 Hz round-robin.
 //   • Windscreen: on-glass condensation (windscreen.js) wiped by the blades; DOM overlay (overlay.js)
 //     for vignette, flash white-out and shock sparks.
@@ -35,6 +39,8 @@ import { Gearbox } from './gearbox.js';
 import { Mirrors } from './mirrors.js';
 import { WindscreenFog } from './windscreen.js';
 import { FpOverlay } from './overlay.js';
+import { CabInterior, RIM_R } from './cabInterior.js';
+import { CabArms } from './cabArms.js';
 
 export const RV_LAYER = 1;                     // WorldView's RV body layer (not exported there)
 export const LOOK_SECONDS = 3;
@@ -116,6 +122,9 @@ export class FirstPersonDriver {
       wiperMountL: g('wiper_l_mount'), wiperMountR: g('wiper_r_mount'),
     };
     this.eye = new THREE.Vector3(...this.ud.eye);
+    this.interior = new CabInterior(cab);
+    this.arms = new CabArms(this.frame, { mount: g('wheel_mount'), rimRadius: RIM_R });
+    this._armEye = new THREE.Vector3();
     const rvSize = view.rv?.size || {};
     this.mirrors = this.opts.mirrors ? new Mirrors(cab, { rvLength: rvSize.l || 8.6, rvHeight: rvSize.h || 3.4, hz: this.opts.mirrorHz, scale: this.opts.mirrorScale, far: this.opts.mirrorFar }) : null;
     this.fog = typeof document !== 'undefined' ? new WindscreenFog(this.frame) : null;
@@ -261,6 +270,7 @@ export class FirstPersonDriver {
     cam.near = NEAR; cam.updateProjectionMatrix();
     cam.layers.disable(RV_LAYER);
     this.cab.visible = true;
+    if (this.interior && !this._bulbDone) { this._bulbDone = true; this.interior.bulbCheck(); }   // key-on lamp test, once
   }
   _release(stolen = false) {
     const v = this.view, cam = v.camera;
@@ -319,12 +329,18 @@ export class FirstPersonDriver {
     if (P.speed) P.speed.rotation.z = V.speed + bumpJ;
     if (P.rpm) P.rpm.rotation.z = V.rpm + bumpJ * 0.5;
     if (P.temp) P.temp.rotation.z = V.temp;
-    // steering wheel (+ = right) with the hands riding along
+    // steering wheel (+ = right), kicking a little on bumps; Rook's arms grip it (cabArms.js)
     V.wheel = damp(V.wheel, clamp((rv.steer || 0) * 1.7, -2.2, 2.2), 14, dt);
-    if (P.wheel) P.wheel.rotation.z = V.wheel;
-    // the asset's recipe: hands counter-rotate half the wheel angle so the sleeves never cross
-    if (P.handL) P.handL.rotation.z = -0.5 * V.wheel;
-    if (P.handR) P.handR.rotation.z = -0.5 * V.wheel;
+    const wheelNow = V.wheel + bumpJ * 0.7;
+    if (P.wheel) P.wheel.rotation.z = wheelNow;
+    if (this.owning) {
+      const H = this.head;
+      this.arms.update(dt, {
+        wheel: wheelNow, eye: this._armEye.set(this.eye.x + H.lean, this.eye.y + this.bob, this.eye.z),
+        horn: !!rv.horn, gear: this.gearbox.gear, bump: (snap.feel && snap.feel.bump) || 0,
+      });
+      this.interior.update(dt, { snap, gear: this.gearbox.gear, light: this._light(snap), running: this.gearbox.running });
+    }
     // wipers: run on windscreen fog or in the dust storm; finish the stroke and park when done
     const fx = snap.fx || {};
     const want = (fx.fog || 0) > 0.1 || snap.weather === 'dust' || !!this.forceWipers;
@@ -443,6 +459,8 @@ export class FirstPersonDriver {
     if (typeof document !== 'undefined') document.removeEventListener('pointerlockchange', this._onLockChange);
     if (this.mirrors) this.mirrors.dispose();
     if (this.fog) this.fog.dispose();
+    if (this.arms) this.arms.dispose();
+    if (this.interior) this.interior.dispose();
     if (this.overlay) this.overlay.destroy();
     if (this.cab) this.cab.removeFromParent();
   }

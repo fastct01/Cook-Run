@@ -1,6 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // FX: comic pop-up words at event positions, pulsing ground markers for supply
-// stops / the sell point, and impact bursts. DOM overlays (fumes haze, rear
+// stops / the sell point, and impact bursts. [wreck] explosion(x, y, z, power) fireball +
+// scorch(x, y, z, r) decals + one pre-made orange PointLight (explosion flash / burning wreck). DOM overlays (fumes haze, rear
 // window frame) are handled by WorldView; police edge pulse lives in the HUD.
 // ─────────────────────────────────────────────────────────────────────────────
 import * as THREE from 'three';
@@ -65,6 +66,14 @@ export class Fx {
       const lot = st.lot;
       this.markers.push(this._marker({ id: st.id, x: lot.cx, z: lot.cz, r: Math.min(lot.halfLen, lot.halfDepth + 3) * 1.15, color: '#e8b84a', y: 0.06 }));
     }
+    // [wreck] one orange point light for explosions + the burning wreck. Created up front with intensity 0
+    // (adding a light later recompiles every material → a hitch right at the explosion).
+    this.light = new THREE.PointLight('#ff9a48', 0, 70, 1.4);
+    this.light.castShadow = false;
+    this.root.add(this.light);
+    this.lightFlash = 0;             // decaying explosion flash (0..1+)
+    this.burn = null;                // { x, y, z, k } steady fire light (set by the RV wreck every frame)
+    this.scorches = [];              // persistent scorch decals { x, y, z, r, rot }
     if (info.sell) {
       const sp = info.sell;
       const hw = track.halfWidth(sp.z) + track.shoulder(sp.z);
@@ -151,6 +160,103 @@ export class Fx {
     }
   }
 
+  /**
+   * [wreck] A big fiery explosion at a world position: white flash, rolling fireball, black smoke
+   * billow, sparks/embers, ground shockwave ring, light flash. power ~1 = the RV going up; 0.3–0.7 = secondaries.
+   */
+  explosion(x, y, z, power = 1) {
+    const P = this.particles, p = Math.max(0.2, power), R = Math.random;
+    const gy = this._groundY(z, y);
+    // flash core + rays
+    P.spawn({ x, y: y + 1.2, z, life: 0.16 + 0.1 * p, size: 7 * p, size1: 13 * p, r: 1, g: 0.9, b: 0.7, alpha: 0.9, cell: XATLAS.FLASH, additive: true, fadeIn: 0 });
+    P.spawn({ x, y: y + 1.4, z, life: 0.4 + 0.2 * p, size: 5 * p, size1: 10 * p, r: 1, g: 0.5, b: 0.15, alpha: 0.7, cell: ATLAS.GLOW, additive: true, fadeIn: 0 });
+    // fireball: lumpy additive puffs rolling outward and up (white-yellow → orange → deep red)
+    const nf = Math.round(18 + 30 * p);
+    for (let i = 0; i < nf; i++) {
+      const a = R() * Math.PI * 2, e = R() * 1.3 - 0.15, s = (3 + R() * 7) * (0.55 + 0.45 * p);
+      const ce = Math.cos(e);
+      P.spawn({
+        x: x + Math.cos(a) * R() * 1.2 * p, y: y + 0.8 + R() * 1.6 * p, z: z + Math.sin(a) * R() * 2 * p,
+        vx: Math.cos(a) * ce * s, vy: Math.sin(e) * s + 2.5 * p, vz: Math.sin(a) * ce * s,
+        life: 0.7 + R() * 0.8 * p, size: (1.6 + R() * 1.6) * p, size1: (4.5 + R() * 4) * p,
+        r: 1, g: 0.68 + R() * 0.15, b: 0.25, r1: 0.55, g1: 0.1, b1: 0.02, alpha: 0.45, cell: R() < 0.8 ? ATLAS.PUFF : ATLAS.FLAME, additive: true,
+        drag: 2.4, gravity: -1.5, spin: (R() - 0.5) * 2, fadeIn: 0.02,
+      });
+    }
+    // dense orange fire body (normal blend: keeps its colour instead of saturating to white)
+    for (let i = 0; i < Math.round(10 + 16 * p); i++) {
+      const a = R() * Math.PI * 2, e = R() * 1.1, s = (2 + R() * 5) * (0.55 + 0.45 * p);
+      P.spawn({
+        x: x + Math.cos(a) * R() * 1.5 * p, y: y + 1 + R() * 1.5 * p, z: z + Math.sin(a) * R() * 2 * p,
+        vx: Math.cos(a) * Math.cos(e) * s, vy: Math.sin(e) * s + 3 * p, vz: Math.sin(a) * Math.cos(e) * s,
+        life: 0.8 + R() * 0.7, size: (2 + R() * 1.5) * p, size1: (5 + R() * 3) * p,
+        r: 1, g: 0.62, b: 0.18, r1: 0.25, g1: 0.08, b1: 0.04, alpha: 0.9, cell: ATLAS.PUFF, drag: 2.2, gravity: -1.5, spin: (R() - 0.5) * 2, fadeIn: 0.02,
+      });
+    }
+    // black smoke billow, slower and bigger, behind the fire
+    const ns = Math.round(14 + 26 * p);
+    for (let i = 0; i < ns; i++) {
+      const a = R() * Math.PI * 2, s = (1.5 + R() * 4) * p, d = 0.05 + R() * 0.09;
+      P.spawn({
+        x: x + Math.cos(a) * R() * 2 * p, y: y + 1.5 + R() * 2.5 * p, z: z + Math.sin(a) * R() * 2.5 * p,
+        vx: Math.cos(a) * s, vy: 2.5 + R() * 4 * p, vz: Math.sin(a) * s,
+        life: 2.6 + R() * 2.4 * p, size: (2.5 + R() * 2) * p, size1: (9 + R() * 7) * p,
+        r: d, g: d * 0.95, b: d * 0.9, alpha: 1, cell: ATLAS.PUFF, drag: 1.2, spin: (R() - 0.5) * 0.6, fadeIn: 0.25,
+      });
+    }
+    // sparks + embers
+    const nk = Math.round(30 + 60 * p);
+    for (let i = 0; i < nk; i++) {
+      const a = R() * Math.PI * 2, e = 0.15 + R() * 1.25, s = (8 + R() * 18) * (0.5 + 0.5 * p);
+      P.spawn({
+        x, y: y + 1.4, z, vx: Math.cos(a) * Math.cos(e) * s, vy: Math.sin(e) * s, vz: Math.sin(a) * Math.cos(e) * s,
+        gravity: 14, drag: 0.6, life: 0.8 + R() * 1.4, size: 0.35, size1: 0.1, r: 1, g: 0.92, b: 0.6, r1: 1, g1: 0.4, b1: 0.08,
+        cell: R() < 0.5 ? ATLAS.GLOW : ATLAS.SPARK, additive: true, floor: gy + 0.05, spin: 6,
+      });
+    }
+    // ground: shockwave ring + dust skirt
+    P.spawn({ x, y: gy + 0.08, z, flat: true, additive: true, life: 0.55, size: 3 * p, size1: 34 * p, r: 1, g: 0.8, b: 0.5, alpha: 0.9, cell: XATLAS.SHOCK, linearSize: true, fadeIn: 0 });
+    for (let i = 0; i < Math.round(10 + 14 * p); i++) {
+      const a = R() * Math.PI * 2, s = (8 + R() * 8) * p;
+      P.spawn({ x: x + Math.cos(a) * 2, y: gy + 0.4, z: z + Math.sin(a) * 2, vx: Math.cos(a) * s, vy: 0.3 + R(), vz: Math.sin(a) * s, life: 1.4 + R(), size: 2, size1: 6 * p, r: 0.55, g: 0.5, b: 0.44, alpha: 0.5, cell: ATLAS.PUFF, drag: 2.6 });
+    }
+    this.lightFlash = Math.max(this.lightFlash, 0.6 + 0.6 * p);
+    this._lightAt = { x, y: y + 5, z };
+  }
+
+  /** [wreck] persistent burnt patch on the ground (drawn every frame until dispose). */
+  scorch(x, y, z, r = 6) {
+    if (this.scorches.length > 8) this.scorches.shift();
+    this.scorches.push({ x, y: this._groundY(z, y), z, r, rot: Math.random() * 6.28 });
+  }
+
+  _groundY(z, fallback) {
+    const s = this.track && this.track.surfaceY(z);
+    return s == null || !Number.isFinite(s) || Math.abs(s - fallback) > 3 ? fallback : s;
+  }
+
+  _updateLight(dt) {
+    const L = this.light;
+    this.lightFlash = Math.max(0, this.lightFlash - dt * 2.6);
+    const b = this.burn;
+    let I = 0;
+    if (b && b.k > 0) {
+      const fl = 0.72 + 0.28 * Math.sin(this.time * 19) * Math.sin(this.time * 7.7 + 1.3);
+      I = 70 * b.k * fl;
+      L.position.set(b.x, b.y, b.z);
+    }
+    if (this.lightFlash > 0.01) {
+      I = Math.max(I, 300 * this.lightFlash * this.lightFlash);
+      if (this._lightAt && !(b && b.k > 0)) L.position.set(this._lightAt.x, this._lightAt.y, this._lightAt.z);
+    }
+    L.intensity = I;
+    L.color.setRGB(1, 0.62 + 0.25 * Math.min(1, this.lightFlash), 0.3 + 0.35 * Math.min(1, this.lightFlash));
+    for (const s of this.scorches) {
+      this.particles.once({ x: s.x, y: s.y + 0.04, z: s.z, flat: true, cell: XATLAS.SPLAT, size: s.r * 2, rot: s.rot, r: 0.03, g: 0.028, b: 0.025, alpha: 0.88 });
+      this.particles.once({ x: s.x, y: s.y + 0.05, z: s.z, flat: true, cell: ATLAS.GLOW, size: s.r * 1.6, rot: s.rot, r: 0.02, g: 0.018, b: 0.015, alpha: 0.7 });
+    }
+  }
+
   burst(x, y, z, color = [1, 0.9, 0.4], n = 14) {
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2, s = 3 + Math.random() * 5;
@@ -160,6 +266,7 @@ export class Fx {
 
   update(dt, snap, camPos) {
     this.time += dt;
+    this._updateLight(dt);
     // set-piece start effects (from the snapshot, so it works for both roles without event forwarding)
     if (snap && Array.isArray(snap.setpieces)) for (const sp of snap.setpieces) if (sp && sp.id) this._setpieceStart(sp, snap);
     // words
@@ -202,6 +309,7 @@ export class Fx {
   dispose() {
     if (this.scene.userData.crFx === this) delete this.scene.userData.crFx;
     this.root.removeFromParent();
+    this.light.dispose?.();
     for (const m of this.markers) { m.ring.material.dispose(); m.arrow.material.dispose(); }
     for (const s of [...this.words, ...this.pool]) s.material.dispose();
     this.ringGeo.dispose(); this.arrowGeo.dispose();

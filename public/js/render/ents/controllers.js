@@ -350,11 +350,35 @@ export const CONTROLLERS = {
   },
 
   // ── set-piece vehicles ───────────────────────────────────────────────────
+  // comet_car state: 0 cruising beside the RV (pilot flame), 1 boosting in, 2 salute (canopy
+  // cracked open + a visor glint), 3 full afterburner (big flame, speed streaks, "ZOOOM!")
   comet(E, rec, dt) {
+    const inst = rec.inst, P = E.P, st = rec.state | 0;
+    // canopy: cracked open for the salute, eased (rig part 'canopy': rotation.x < 0 opens)
+    rec.canopy = (rec.canopy || 0) + ((st === 2 ? 1 : 0) - (rec.canopy || 0)) * Math.min(1, dt * 5);
+    if (inst.proto.parts.canopy !== undefined) inst.rig.setEuler('canopy', -0.42 * rec.canopy, 0, 0);
     if (!rec.near) return;
-    const inst = rec.inst, P = E.P;
+    const fresh = rec.cst !== undefined && rec.cst !== st;   // state changed since our last frame
+    rec.cst = st;
+    if (st === 2 && fresh && !rec.saluted) {
+      rec.saluted = true;
+      toWorld(inst, 0, 2.05, 0.2);
+      E.word('TING!', _v.x, _v.y + 0.4, _v.z, { fill: '#e8fbff', burst: '#2a8f8b', scale: 0.55 });
+    }
+    if (st === 3 && fresh && !rec.zoomed) {
+      rec.zoomed = true;
+      toWorld(inst, 0, 1.4, -4.2);
+      E.word('ZOOOM!', _v.x, _v.y, _v.z, { fill: '#e8fbff', burst: '#1d2b5a', scale: 1.15 });
+    }
+    // visor glint while saluting (a star twinkle at the helmet)
+    if (st === 2 && rec.canopy > 0.5) {
+      const tw = Math.max(0, Math.sin((E.time - rec.stateT) * 5.5));
+      toWorld(inst, 0, 1.62, 0.12);
+      P.once({ x: _v.x, y: _v.y, z: _v.z, cell: ATLAS.STAR, size: 0.25 + 0.75 * tw * tw, rot: E.time * 2, r: 1, g: 1, b: 0.9, alpha: 0.95, additive: true });
+      P.once({ x: _v.x, y: _v.y, z: _v.z, cell: ATLAS.GLOW, size: 0.9, r: 0.55, g: 1, b: 0.95, alpha: 0.5 * tw, additive: true });
+    }
     const piv = inst.proto.parts.booster !== undefined ? inst.proto.pivots[inst.proto.parts.booster] : new THREE.Vector3(0, 0.66, -3.08);
-    const boost = rec.state === 0 ? 0.35 : Math.min(1, 0.55 + rec.speed / 30);
+    const boost = st === 3 ? 1.45 : st === 1 ? Math.min(1, 0.55 + rec.speed / 30) : 0.35;
     const fl = 0.85 + 0.15 * Math.sin(E.time * 47) * Math.sin(E.time * 13);
     const bx = -Math.sin(rec.yaw), bz = -Math.cos(rec.yaw);
     toWorld(inst, piv.x, piv.y, piv.z - 0.1);
@@ -368,6 +392,15 @@ export const CONTROLLERS = {
     }
     if (rate(rec.acc, 'spk', 25 * boost, dt)) P.spawn({ x, y, z, vx: rec.vx + bx * 4 + (R() - 0.5) * 2, vy: (R() - 0.3) * 2, vz: rec.vz + bz * 4 + (R() - 0.5) * 2, life: 0.6, size: 0.35, size1: 0.1, r: 0.6, g: 1, b: 1, cell: XATLAS.SPARK2, additive: true, spin: 6 });
     for (const nm of ['headlight_l', 'headlight_r']) { const a = inst.proto.anchors[nm]; if (a) { toWorld(inst, a.x, a.y, a.z + 0.1); P.once({ x: _v.x, y: _v.y, z: _v.z, cell: ATLAS.GLOW, size: 1.5, r: 1, g: 0.95, b: 0.8, alpha: 0.8, additive: true }); } }
+    // afterburner: a long teal exhaust trail + speed streaks off the fins
+    if (st === 3) {
+      const n2 = rate(rec.acc, 'tr', 40, dt);
+      for (let k = 0; k < n2; k++) P.spawn({ x: x + bx * (1 + R() * 2), y: y + (R() - 0.5) * 0.3, z: z + bz * (1 + R() * 2), vx: rec.vx * 0.55, vy: 0.3 + R() * 0.4, vz: rec.vz * 0.55, life: 0.7, size: 1.2, size1: 2.8, r: 0.5, g: 1, b: 0.95, r1: 0.25, g1: 0.35, b1: 0.6, alpha: 0.55, cell: ATLAS.PUFF, additive: true, drag: 2 });
+      if (rate(rec.acc, 'sk', 18, dt)) for (const sx of [-1.15, 1.15]) {
+        toWorld(inst, sx, 1.0, -1.5);
+        P.spawn({ x: _v.x, y: _v.y, z: _v.z, vx: rec.vx * 0.8, vy: 0, vz: rec.vz * 0.8, life: 0.3, size: 0.5, size1: 0.15, rot: Math.PI / 2 + rec.yaw, r: 0.85, g: 1, b: 1, alpha: 0.7, cell: XATLAS.STREAK, additive: true });
+      }
+    }
   },
 
   streetcar(E, rec, dt) {

@@ -283,6 +283,11 @@ export function createAudio({ volume = 0.8, route = null } = {}) {
     osc('sawtooth', 233, brassF); osc('sawtooth', 294, brassF); osc('sawtooth', 349, brassF);
     L.brass = { g: brassG };
     L.hose = noiseLoop('bandpass', 2300, 0.8);
+    // [wreck] the burning RV: low roar with a fluttering crackle
+    const fg = gainNode(0); const ff = filt('lowpass', 520, 0.7, fg);
+    const fam = ctx.createGain(); fam.gain.value = 0.7; fam.connect(ff); noiseSrc().connect(fam);
+    lfo(5.3, 0.22, fam.gain); lfo(13.7, 0.12, fam.gain, 'square');
+    L.fire = { g: fg, crackle: 0 };
     const wg = gainNode(0); const wf = filt('bandpass', 1400, 0.7, wg);
     const wam = ctx.createGain(); wam.gain.value = 0.5; wam.connect(wf); noiseSrc().connect(wam);
     lfo(2.3, 0.5, wam.gain, 'triangle');
@@ -341,7 +346,7 @@ export function createAudio({ volume = 0.8, route = null } = {}) {
     backfire(n = 1) { for (let i = 0; i < n; i++) { const d = i * (0.09 + Math.random() * 0.07); burst(0.07, 900, 0.8, 0.5, 'lowpass', d, 180); tone('sine', 95, 42, 0.09, 0.45, d); } },
     pop(level = 0.18) { const d = Math.random() * 0.02; burst(0.045, 650 + Math.random() * 400, 0.9, level, 'lowpass', d, 160); tone('sine', 120, 55, 0.05, level * 0.8, d); },
     spotted() { tone('square', 1046, 1046, 0.1, 0.12); tone('square', 1046, 1046, 0.1, 0.12, 0.16); },
-    end(won) { (won ? [523, 659, 784, 1046] : [392, 330, 262, 196]).forEach((f, i) => tone(won ? 'triangle' : 'sawtooth', f, f, 0.45, 0.2, i * 0.16, won ? null : { type: 'lowpass', f: 900 })); },
+    end(won, delay = 0) { (won ? [523, 659, 784, 1046] : [392, 330, 262, 196]).forEach((f, i) => tone(won ? 'triangle' : 'sawtooth', f, f, 0.45, 0.2, delay + i * 0.16, won ? null : { type: 'lowpass', f: 900 })); },
     clunk(dir = 1) {
       tone('sine', dir > 0 ? 78 : 92, 36, 0.14, 0.32);
       burst(0.05, 1100, 1.5, 0.11, 'bandpass', 0.005);
@@ -384,6 +389,24 @@ export function createAudio({ volume = 0.8, route = null } = {}) {
     },
     kick(k = 1, d = 0) { tone('sine', 72, 44, 0.2, 0.32 * k, d, null, 0.004); },
     snare(k = 1, d = 0) { burst(0.12, 1900, 0.8, 0.2 * k, 'bandpass', d); tone('triangle', 210, 160, 0.06, 0.08 * k, d); },
+    // [wreck] the RV blowing up: sub-bass thump + roaring lowpassed blast + crackle + falling debris clatter.
+    // k ~1.3 for the main blast, 0.3–0.7 for the secondaries.
+    explosion(k = 1) {
+      const big = k >= 1;
+      tone('sine', big ? 70 : 95, 22, big ? 1.8 : 0.7, Math.min(1, 0.95 * k));
+      tone('triangle', big ? 48 : 60, 18, big ? 1.4 : 0.5, 0.5 * k);
+      burst(big ? 2.6 : 0.9, big ? 3200 : 2400, 0.5, Math.min(1, 0.9 * k), 'lowpass', 0, 90);
+      burst(big ? 0.5 : 0.2, 6000, 0.7, 0.45 * k, 'highpass');
+      burst(big ? 1.2 : 0.45, 900, 0.9, 0.5 * k, 'bandpass', 0.04, 160);
+      const n = big ? 22 : 7;
+      for (let i = 0; i < n; i++) burst(0.02 + Math.random() * 0.03, 1500 + Math.random() * 3000, 0.8, (0.08 + Math.random() * 0.15) * k, 'highpass', 0.1 + Math.random() * (big ? 1.6 : 0.6));
+      if (big) {
+        // debris raining down: clanks and rattles
+        for (let i = 0; i < 9; i++) { const d = 0.7 + Math.random() * 1.6; tone('triangle', 300 + Math.random() * 500, 120, 0.12, 0.08, d); burst(0.05, 2200, 2, 0.1, 'bandpass', d); }
+        tone('sine', 3000, 2980, 2.0, 0.035, 0.1, null, 0.05);   // ears ringing
+        muffleFor(1.6, 0.85);
+      }
+    },
     ding(k = 1) { tone('triangle', 1250, 1250, 0.5, 0.11 * k, 0, null, 0.002); tone('sine', 1870, 1870, 0.4, 0.07 * k, 0, null, 0.002); },
   };
 
@@ -423,10 +446,16 @@ export function createAudio({ volume = 0.8, route = null } = {}) {
     set(L.starter.g.gain, crank ? 0.16 : 0, crank ? 0.03 : 0.05);
     catchT = Math.max(0, catchT - dt);
     const flare = catchT > 0 ? Math.sin((catchT / 0.7) * Math.PI) * 1100 : 0;
-    const running = engineState === 'on' && st.running !== false;
+    const wrecked = !!rv.wrecked;
+    const running = engineState === 'on' && st.running !== false && !wrecked;
     const rpm = (running ? st.rpm : crank ? 190 : st.rpm) + flare;
     const thr = clamp(st.throttle || 0, 0, 1);
-    L.eng.set({ rpm, throttle: thr, load: st.load || 0, running: running || crank, level: running ? 1 : crank ? 0.35 : 0 }, t, 0.04);
+    L.eng.set({ rpm, throttle: thr, load: st.load || 0, running: running || crank, level: running ? 1 : crank ? 0.35 : 0 }, t, wrecked ? 0.02 : 0.04);
+    // [wreck] fire roar + crackles
+    if (L.fire) {
+      set(L.fire.g.gain, wrecked ? 0.2 : 0, wrecked ? 0.4 : 0.1);
+      if (wrecked) { L.fire.crackle -= dt; if (L.fire.crackle <= 0) { play('pop', 0.05 + Math.random() * 0.08); L.fire.crackle = 0.04 + Math.random() * 0.22; } }
+    }
     // gear change clunk
     if (running && st.gear !== prevGear && st.gear >= 1 && prevGear >= 1) play('clunk', st.gear - prevGear);
     prevGear = st.gear;
@@ -558,7 +587,8 @@ export function createAudio({ volume = 0.8, route = null } = {}) {
       case EV.TRAIN: if (ev.state === 'warn' || ev.state === 'pass') play('trainHorn'); break;
       case EV.GADGET: play('gadget', ev.gadget); break;
       case EV.SPOTTED: play('spotted'); break;
-      case EV.END: play('end', !!(ev.result && ev.result.won)); break;
+      case EV.END: play('end', !!(ev.result && ev.result.won), ev.result && ev.result.reason === 'wrecked' ? 2.6 : 0); break;
+      case EV.RV_EXPLODE: play('explosion', 1.3); break;
       case EV.CANISTER: {
         const d = distTo(ev, snap);
         const k = ev.hitRv ? 1 : clamp(1 - d / 60, 0.15, 1);

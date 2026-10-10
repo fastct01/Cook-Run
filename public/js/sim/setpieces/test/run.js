@@ -349,7 +349,9 @@ function scenarios(def) {
   const base = [{ label: 'patient', driver: 'patient' }, { label: 'detour', driver: 'detour' }, { label: 'reckless', driver: 'reckless', drv: { cruise: 24 } }];
   switch (T) {
     case 'car_carrier': case 'tornado': return [{ label: 'detour', driver: 'detour', drv: { cruise: 27 } }, { label: 'reckless', driver: 'reckless', drv: { cruise: 27 } }];
-    case 'midnight_comet': return [...base, { label: 'detour+cops', driver: 'detour', stars: 2 }];
+    case 'midnight_comet': return [...base, { label: 'detour+cops', driver: 'detour', stars: 2 },
+      { label: 'stopped', driver: 'patient', drv: { stopAt: def.z - 40 }, stopAt: def.z - 40, untilT: 75 },
+      { label: 'right lane', driver: 'lane', drv: { u: 5.1 }, u0: 5.1 }];
     case 'toll_plaza': return [{ label: 'open 0★', driver: 'detour', stars: 0 }, { label: 'checkpoint 2★', driver: 'detour', stars: 2 }, { label: 'checkpoint reckless', driver: 'reckless', stars: 3 }];
     case 'car_wash': return [
       { label: 'wash lane slow 2★', driver: 'lane', stars: 2, cops: false, drv: { cruise: 12 }, laneWash: true },
@@ -405,6 +407,27 @@ async function mockSuite(data) {
         o.untilT = 70;
         o.each = (sim) => { if (Math.abs(sim.rv.speed) < 0.3 && sim.rv.z > sc.stopAt - 20) sim.phase = 'won'; };
       }
+      if (def.type === 'midnight_comet') {
+        // side-by-side: lateral gap to every body level with the RV, time alongside, where bodies vanish
+        o.each = (sim, ctx) => {
+          const st = sim.setpieces.state().find((x) => x.type === 'midnight_comet');
+          const E = ctx.extra;
+          E.phases = E.phases || new Set(); E.last = E.last || new Map(); E.minGap = E.minGap ?? 99; E.along = E.along || 0;
+          if (!st) return;
+          E.phases.add(st.phase);
+          if (st.phase === 'alongside') E.along += DT;
+          const rv = sim.rv, tr = sim.track, rvU = tr.uAt(rv.x, rv.z), live = new Set(st.ids || []);
+          for (const e of sim.setpieces.ents([])) {
+            if (!live.has(e[0])) continue;
+            const kind = KIND[e[1]], half = kind === 'comet_car' ? [3.05, 1.05] : [2.4, 1.0];
+            const ds = e[4] - rv.z;
+            if (Math.abs(ds) < half[0] + 4.3) E.minGap = Math.min(E.minGap, Math.abs(tr.uAt(e[2], e[4]) - rvU) - 1.3 - half[1]);
+            E.last.set(e[0], ds);
+          }
+          if (E.prevLive) for (const id of E.prevLive) if (!live.has(id)) E.goneAt = Math.min(E.goneAt ?? 1e9, E.last.get(id));
+          E.prevLive = live;
+        };
+      }
       if (def.type === 'drawbridge') {
         o.each = (sim, ctx) => { const st = sim.setpieces.state().find((s) => s.type === 'drawbridge'); if (st) ctx.extra.maxAngle = Math.max(ctx.extra.maxAngle ?? 0, st.angle); };
       }
@@ -442,6 +465,15 @@ function typeChecks(def, sc, c) {
       break;
     case 'midnight_comet':
       check(`${tag}: comet + 6 cops`, c.kinds.has('comet_car') && c.kinds.has('cop'));
+      {
+        const E = c.extra, ph = E.phases || new Set();
+        check(`${tag}: approach → alongside → boost`, ph.has('approach') && ph.has('alongside') && ph.has('boost'), [...ph].join('→'));
+        check(`${tag}: drove parallel ≥ 4 s`, (E.along || 0) >= 4, `${r1(E.along || 0)} s`);
+        check(`${tag}: ≥ 1.45 m sideways gap while level with the RV`, (E.minGap ?? 99) >= 1.45, `min ${r1(E.minGap ?? 99)} m`);
+        check(`${tag}: no damage to a driver who holds its lane`, sim.log.damage === 0, `${r1(sim.log.damage)} hp`);
+        if (sc.label === 'stopped' || sc.label === 'patient') check(`${tag}: despawned well ahead (≥ 300 m)`, E.goneAt != null && E.goneAt >= 300, `first gone at ${r1(E.goneAt ?? -1)} m`);
+        check(`${tag}: caption with a subtitle`, c.events.some((e) => e.phase === 'alongside' && e.caption && e.sub));
+      }
       check(`${tag}: redirectCops(${def.pullSeconds})`, sim.log.redirect && sim.log.redirect.s === def.pullSeconds);
       if (sim.log.redirect) { const p = sim.log.redirect.fn({ id: 1, x: 0, z: 0 }); check(`${tag}: redirect target finite`, p && Number.isFinite(p.x) && Number.isFinite(p.z)); }
       break;

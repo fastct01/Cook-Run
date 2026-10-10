@@ -241,7 +241,7 @@ export class Hazards3D {
     P.fanBlades.rotation.x = this.fanA;
     this.louverK += ((vent ? 1 : 0) - this.louverK) * (1 - Math.exp(-dt * 6));
     for (const l of P.louvers.children) l.rotation.z = -this.louverK * 1.0;
-    const fumes = lab.fumes || 0, fire = lab.fire || 0;
+    const fumes = lab.fumes || 0, fire = this.wreck ? 1 : lab.fire || 0;   // [wreck] the RV blew up: everything burns
     if (vent && (fumes > 0.04 || fire > 0 || lab.cooking)) {
       this.acc.vent += dt * (3 + fumes * 14 + fire * 10);
       while (this.acc.vent > 1) {
@@ -290,6 +290,17 @@ export class Hazards3D {
           vx: (Math.random() - 0.5) * 0.6, vy: 1.2 + Math.random() * 1.2, vz: (Math.random() - 0.5) * 0.6, life: 0.6 + Math.random() * 0.4, size: 0.05, size1: 0.02, r: 1, g: 0.75, b: 0.3, r1: 1, g1: 0.35, b1: 0.1, cell: ATLAS.SPARK, additive: true, drag: 0.8 });
       }
       if (ownFire) parts.once({ x: this.burner.x, y: this.burner.y + 0.25 + fv * 0.2, z: this.burner.z, size: 0.7 + fv * 1.1, r: 1, g: 0.5, b: 0.18, alpha: 0.35 + 0.15 * Math.sin(t * 21), cell: ATLAS.GLOW, additive: true });
+    }
+    // [wreck] flames all through the lab
+    if (this.wreck) {
+      this.acc.wreck = (this.acc.wreck || 0) + dt * 40;
+      while (this.acc.wreck > 1) {
+        this.acc.wreck -= 1;
+        const x = (Math.random() - 0.5) * 2 * (D.XI - 0.15), z = D.ZRI + 0.2 + Math.random() * (D.ZP - D.ZRI - 0.4), y = D.FY + 0.1 + Math.random() * 1.2;
+        parts.spawn({ x, y, z, vx: (Math.random() - 0.5) * 0.3, vy: 0.8 + Math.random() * 0.8, vz: (Math.random() - 0.5) * 0.3, life: 0.5 + Math.random() * 0.4,
+          size: 0.35 + Math.random() * 0.3, size1: 0.9, r: 1, g: 0.8, b: 0.4, r1: 0.9, g1: 0.25, b1: 0.05, alpha: 0.9, cell: ATLAS.FLAME, additive: true, drag: 0.6 });
+        if (Math.random() < 0.35) parts.spawn({ x, y: y + 0.6, z, vx: (Math.random() - 0.5) * 0.3, vy: 0.6, vz: (Math.random() - 0.5) * 0.3, life: 2, size: 0.4, size1: 1.4, r: 0.08, g: 0.075, b: 0.07, alpha: 0.7, cell: ATLAS.PUFF, drag: 0.5 });
+      }
     }
     // unattended heat step → blue burner ring stays lit
     const g = lab.current;
@@ -404,6 +415,14 @@ export class Hazards3D {
       const a = Math.random() * Math.PI * 2;
       this.parts.spawn({ x: this.burner.x, y: this.burner.y + 0.2, z: this.burner.z, vx: Math.cos(a) * 0.8, vy: 0.6 + Math.random() * 0.6, vz: Math.sin(a) * 0.8, life: 0.8, size: 0.15, size1: 0.5, r: 0.3, g: 0.29, b: 0.28, alpha: 0.6, cell: ATLAS.PUFF, drag: 2 });
     }
+  }
+
+  /** [wreck] the whole RV blew up: big flash + shake now, the lab burns from here on. */
+  wreckBlast() {
+    if (this.wreck) return;
+    this.wreck = true;
+    this.explode();
+    if (this.view.camRig) this.view.camRig.shake(1.6);
   }
 
   explode() {

@@ -174,3 +174,85 @@ export function softDiscTexture() {
   discTex = new THREE.CanvasTexture(c);
   return discTex;
 }
+
+// ── wear / grime (tileable): R = fine grain, G = scratches, B = low-frequency smudges / dust ──
+// Sampled in object space by the first-person cab materials (render/fp/cabInterior.js): vinyl grain,
+// scuffed plastic and dust without UVs. Linear data (not colour): NoColorSpace.
+let wearTex = null;
+export function wearTexture(size = 256) {
+  if (wearTex) return wearTex;
+  const S = size, c = canvas(S, S), g = c.getContext('2d');
+  // periodic value noise
+  let seed = 1337;
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  const lattice = (n) => { const a = new Float32Array(n * n); for (let i = 0; i < a.length; i++) a[i] = rnd(); return a; };
+  const octs = [[4, lattice(4), 0.5], [8, lattice(8), 0.25], [16, lattice(16), 0.14], [32, lattice(32), 0.07], [64, lattice(64), 0.04]];
+  const sm = (t) => t * t * (3 - 2 * t);
+  const vn = (n, L, x, y) => {
+    const fx = x * n, fy = y * n, x0 = Math.floor(fx), y0 = Math.floor(fy), tx = sm(fx - x0), ty = sm(fy - y0);
+    const i0 = ((x0 % n) + n) % n, j0 = ((y0 % n) + n) % n, i1 = (i0 + 1) % n, j1 = (j0 + 1) % n;
+    const a = L[j0 * n + i0], b = L[j0 * n + i1], cc = L[j1 * n + i0], d = L[j1 * n + i1];
+    return a + (b - a) * tx + (cc - a) * ty + (a - b - cc + d) * tx * ty;
+  };
+  const img = g.createImageData(S, S), px = img.data;
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const u = x / S, v = y / S;
+    let low = 0; for (let k = 0; k < 3; k++) low += vn(octs[k][0], octs[k][1], u, v) * octs[k][2];
+    let hi = vn(octs[3][0], octs[3][1], u, v) * 0.5 + vn(octs[4][0], octs[4][1], u, v) * 0.5;
+    const grain = Math.min(1, Math.max(0, 0.5 + (hi - 0.5) * 1.6 + (rnd() - 0.5) * 0.35));
+    const o = (y * S + x) * 4;
+    px[o] = grain * 255; px[o + 1] = 0; px[o + 2] = Math.min(1, Math.max(0, (low / 0.89 - 0.5) * 2.2 + 0.5)) * 255; px[o + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  // scratches into G (additive, wrapped across the tile edges)
+  g.globalCompositeOperation = 'lighter';
+  g.lineCap = 'round';
+  for (let i = 0; i < 70; i++) {
+    const x0 = rnd() * S, y0 = rnd() * S, a = rnd() * Math.PI, len = 6 + rnd() * rnd() * 70, bend = (rnd() - 0.5) * 0.6;
+    const al = 0.25 + rnd() * 0.6, w = rnd() < 0.85 ? 0.7 : 1.4;
+    g.strokeStyle = `rgba(0,${(al * 255) | 0},0,1)`; g.lineWidth = w;
+    for (const ox of [-S, 0, S]) for (const oy of [-S, 0, S]) {
+      g.beginPath(); g.moveTo(x0 + ox, y0 + oy);
+      g.quadraticCurveTo(x0 + ox + Math.cos(a + bend) * len * 0.5, y0 + oy + Math.sin(a + bend) * len * 0.5, x0 + ox + Math.cos(a) * len, y0 + oy + Math.sin(a) * len);
+      g.stroke();
+    }
+  }
+  g.globalCompositeOperation = 'source-over';
+  wearTex = new THREE.CanvasTexture(c);
+  wearTex.colorSpace = THREE.NoColorSpace;
+  wearTex.wrapS = wearTex.wrapT = THREE.RepeatWrapping;
+  wearTex.generateMipmaps = true;
+  wearTex.minFilter = THREE.LinearMipmapLinearFilter;
+  wearTex.anisotropy = 4;
+  return wearTex;
+}
+
+// ── flannel plaid atlas: x 0..¾ = plaid (wraps in V), x ¾..1 = flat white (skin / plain parts take
+// their colour from vertex colours). Used by the first-person arms (render/fp/cabArms.js). ──
+const plaidCache = new Map();
+export function plaidAtlasTexture({ base = '#9a4034', dark = '#6e2c26', deep = '#4f1f1b', light = '#c98a6c', repeatsU = 6, repeatsV = 4 } = {}) {
+  const key = [base, dark, deep, light, repeatsU, repeatsV].join('|');
+  if (plaidCache.has(key)) return plaidCache.get(key);
+  const W = 256, H = 128, PW = 192, c = canvas(W, H), g = c.getContext('2d');
+  g.fillStyle = base; g.fillRect(0, 0, PW, H);
+  const cw = PW / repeatsU, ch = H / repeatsV;
+  g.globalAlpha = 0.55; g.fillStyle = dark;
+  for (let i = 0; i < repeatsU; i++) g.fillRect(i * cw + cw * 0.18, 0, cw * 0.36, H);                // vertical dark bands
+  for (let j = 0; j < repeatsV; j++) g.fillRect(0, j * ch + ch * 0.18, PW, ch * 0.36);               // horizontal dark bands
+  g.globalAlpha = 0.5; g.fillStyle = deep;
+  for (let i = 0; i < repeatsU; i++) for (let j = 0; j < repeatsV; j++) g.fillRect(i * cw + cw * 0.18, j * ch + ch * 0.18, cw * 0.36, ch * 0.36);   // crossings
+  g.globalAlpha = 0.5; g.fillStyle = light;
+  for (let i = 0; i < repeatsU; i++) g.fillRect(i * cw + cw * 0.74, 0, Math.max(1, cw * 0.05), H);
+  for (let j = 0; j < repeatsV; j++) g.fillRect(0, j * ch + ch * 0.74, PW, Math.max(1, ch * 0.05));
+  // twill: faint diagonal weave
+  g.globalAlpha = 0.07; g.strokeStyle = '#000'; g.lineWidth = 1;
+  for (let d = -H; d < PW; d += 3) { g.beginPath(); g.moveTo(d, H); g.lineTo(d + H, 0); g.stroke(); }
+  g.globalAlpha = 1;
+  g.fillStyle = '#ffffff'; g.fillRect(PW, 0, W - PW, H);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = THREE.ClampToEdgeWrapping; t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = 4;
+  plaidCache.set(key, t);
+  return t;
+}

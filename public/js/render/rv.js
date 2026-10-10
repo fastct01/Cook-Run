@@ -2,6 +2,10 @@
 // The hero RV: pose (x,y,z,yaw,pitch,roll), wheel spin + steer, suspension
 // sway, lab vent smoke, fire glow, nitro flames, dust trail, brake lights,
 // sparks on crashes. One rigged draw call + particles.
+// [wreck] explode(ev) / snap.rv.wrecked: the body chars black, two wheels and the roof vent, AC box,
+// door and side panels fly off as debris meshes, secondary explosions (via scene.userData.crFx), and
+// the wreck keeps burning: flames through the windows, a thick black smoke column, embers, scorch.
+// onBoom(x, y, z, power) lets the owner (WorldView) add camera shake / audio to each blast.
 // ─────────────────────────────────────────────────────────────────────────────
 import * as THREE from 'three';
 import { ATLAS } from './textures.js';
@@ -63,6 +67,8 @@ export class RvView {
     this.state = null;
     this.prevYaw = null;
     this.latAcc = 0;
+    this.wreck = null;               // [wreck] state once the RV has blown up
+    this.onBoom = null;              // [wreck] (x, y, z, power) → camera shake / audio for each blast
   }
 
   get position() { return this.outer.position; }
@@ -101,6 +107,15 @@ export class RvView {
     const bob = bump * Math.sin(this.time * 31) * 0.03;
     this.tilt.rotation.set(-(rv.pitch || 0) - this.pitchS, 0, (rv.roll || 0) + this.sway, 'YXZ');
     this.tilt.position.y += bob;
+    if (this.wreck) {
+      // blown tyres (front left, rear right gone): the body slumps onto that diagonal
+      const t = this.wreck.t, k = Math.min(1, t / 0.7);
+      // the blast pops the body up ~0.9 m (one little bounce), then it settles
+      const hop = t < 0.85 ? 4.2 * t - 4.9 * t * t : t < 1.15 ? 0.6 * (t - 0.85) - 2 * (t - 0.85) * (t - 0.85) : 0;
+      this.tilt.rotation.x += 0.035 * k + (t < 0.85 ? 0.12 * Math.sin(t / 0.85 * Math.PI) : 0);
+      this.tilt.rotation.z += 0.075 * k;
+      this.tilt.position.y += Math.max(0, hop) - 0.22 * k;
+    }
     // wheels: spin + steer (front)
     this.wheelAng += (rv.speed * dt) / this.wheelR * (rv.airborne ? 0.98 : 1);
     this.steerVis += ((-(rv.steer || 0) * 0.45) - this.steerVis) * Math.min(1, dt * 10);
@@ -113,7 +128,7 @@ export class RvView {
     const M = this.inst.root.matrixWorld;
     const lab = snap.lab || {};
     // window glow when fire
-    const fire = lab.fire || 0;
+    const fire = this.wreck ? 1 : lab.fire || 0;
     const flick = fire > 0 ? (0.6 + 0.4 * Math.sin(this.time * 23) * Math.sin(this.time * 7.3)) : 0;
     this.rig.setEmit('window_glow', fire > 0 ? (0.8 + fire * 2.4) * flick + 0.3 : 0);
     const gm = this.rig.named.window_glow;      // ART's hidden transparent glow quads
@@ -135,7 +150,7 @@ export class RvView {
       }
     }
     // vent smoke (teal-tinted)
-    if (lab.ventOpen && lab.cooking) {
+    if (lab.ventOpen && lab.cooking && !this.wreck) {
       this.acc.vent += dt * (9 + (lab.fumes || 0) * 10);
       _v.copy(ventPos).applyMatrix4(M);
       const vx = -Math.sin(rv.yaw) * rv.speed * 0.55, vz = -Math.cos(rv.yaw) * rv.speed * 0.55;
@@ -158,7 +173,7 @@ export class RvView {
       }
     }
     // brake lights (model light_brake* parts if present; glow sprites either way)
-    const brake = this.braking > 0.05 || (rv.speed < 0.6 && !rv.airborne && snap.phase === 'drive');
+    const brake = !this.wreck && (this.braking > 0.05 || (rv.speed < 0.6 && !rv.airborne && snap.phase === 'drive'));
     this.rig.setEmitPrefix('light_brake', brake ? 3.0 : 0.25);
     if (brake && this.braking > 0.05) {
       for (const bl of this.brakeLights) {
@@ -181,8 +196,11 @@ export class RvView {
         P.spawn({ x: _v.x, y: _v.y, z: _v.z, vx: (Math.random() - 0.5) * 2, vy: 0.8 + Math.random(), vz: (Math.random() - 0.5) * 2, life: 1.8, size: 1.2, size1: 4.5, r: dc.r, g: dc.g * 0.95, b: dc.b * 0.85, alpha: 0.5 * (off ? 1 : 0.6), cell: ATLAS.PUFF, drag: 1.4 });
       }
     }
+    // [wreck] blown up: char, debris, secondaries, the burning wreck
+    if (rv.wrecked && !this.wreck) this.explode({ x: rv.x, y: rv.y, z: rv.z, yaw: rv.yaw });
+    if (this.wreck) { try { this._wreckUpdate(snap, dt, M); } catch (e) { if (!this._wreckWarned) { this._wreckWarned = true; console.error('[rv] wreck', e); } } }
     // smoke when badly damaged
-    if (rv.hp != null && rv.hp < 35) {
+    else if (rv.hp != null && rv.hp < 35) {
       if (Math.random() < dt * (35 - rv.hp) * 0.5) {
         _v.set(0, (this.size.h || 3.4) * 0.5, (this.size.l || 8.6) * 0.45).applyMatrix4(M);
         P.spawn({ x: _v.x, y: _v.y, z: _v.z, vy: 1.5, vx: -Math.sin(rv.yaw) * rv.speed * 0.4, vz: -Math.cos(rv.yaw) * rv.speed * 0.4, life: 2, size: 0.8, size1: 3, r: 0.3, g: 0.29, b: 0.28, alpha: 0.5, cell: ATLAS.PUFF, drag: 0.9 });
@@ -355,6 +373,210 @@ export class RvView {
     if (seen.size > 64) for (const [k, t] of seen) if (this.time - t > 3) seen.delete(k);
   }
 
+  // ── [wreck] the RV blows up ─────────────────────────────────────────────
+  /** Start the wreck (idempotent): ev = { x, y, z, yaw } (EV.RV_EXPLODE or the snapshot's RV pose). */
+  explode(ev = {}) {
+    if (this.wreck) return false;
+    const rv = { x: ev.x ?? this.outer.position.x, y: ev.y ?? this.outer.position.y, z: ev.z ?? this.outer.position.z, yaw: ev.yaw ?? this.outer.rotation.y };
+    const scene = this.outer.parent;
+    const W = this.wreck = {
+      t: 0, x: rv.x, y: rv.y, z: rv.z, yaw: rv.yaw, debris: [], acc: { fire: 0, smoke: 0, ember: 0, lick: 0 },
+      booms: [[0.22, 0.5, [0.9, 2.2, 2.6]], [0.55, 0.55, [-1.0, 2.6, -2.8]], [1.05, 0.65, [0.2, 3.0, -0.6]], [1.7, 0.42, [-0.8, 1.4, 3.4]], [2.6, 0.5, [0.7, 2.4, -3.9]], [4.2, 0.35, [-0.4, 2.8, 0.9]]],
+      color: new THREE.Color(1, 1, 1),
+    };
+    // wheels blown off (they fly away as debris below)
+    for (const w of ['wheel_fl', 'wheel_rr']) this.rig.setScale(w, 0);
+    if (scene) {
+      W.group = new THREE.Group(); W.group.name = 'rvWreckDebris';
+      scene.add(W.group);
+      this._spawnDebris(W);
+    }
+    const fx = scene && scene.userData.crFx;
+    if (fx) {
+      _v.set(rv.x, rv.y + 0.4, rv.z);
+      fx.explosion(_v.x, _v.y, _v.z, 1.25);
+      fx.scorch(rv.x, rv.y, rv.z, 6.5);
+    }
+    if (this.onBoom) { try { this.onBoom(rv.x, rv.y, rv.z, 1); } catch (e) { /* best effort */ } }
+    return true;
+  }
+
+  _spawnDebris(W) {
+    const L = this.size.l || 8.6, Wd = this.size.w || 2.6, H = this.size.h || 3.4;
+    const c = Math.cos(W.yaw), s = Math.sin(W.yaw);
+    const mat = (hex) => new THREE.MeshLambertMaterial({ color: new THREE.Color(hex).lerp(new THREE.Color('#1a1714'), 0.35), flatShading: true });
+    const mats = {
+      body: mat('#e9e2cf'), teal: mat('#4f8f8a'), door: mat('#9c4a32'), tyre: mat('#1d1c1b'), hub: mat('#8f8a7c'),
+      pipe: mat('#9b9890'), ac: mat('#ddd5c1'), char: new THREE.MeshLambertMaterial({ color: '#1b1816', flatShading: true }),
+    };
+    W.mats = Object.values(mats);
+    W.geos = [];
+    const geo = (g) => { W.geos.push(g); return g; };
+    const wheel = () => {
+      const g = new THREE.Group();
+      const t = new THREE.Mesh(geo(new THREE.CylinderGeometry(0.46, 0.46, 0.3, 12).rotateZ(Math.PI / 2)), mats.tyre);
+      const h = new THREE.Mesh(geo(new THREE.CylinderGeometry(0.24, 0.24, 0.32, 8).rotateZ(Math.PI / 2)), mats.hub);
+      g.add(t, h); return g;
+    };
+    const panel = (w, h, d, stripe) => {
+      const g = new THREE.Group();
+      g.add(new THREE.Mesh(geo(new THREE.BoxGeometry(w, h, d)), stripe === 'door' ? mats.door : mats.body));
+      if (stripe === true) { const st = new THREE.Mesh(geo(new THREE.BoxGeometry(w + 0.02, h * 0.3, d * 1.01)), mats.teal); st.position.y = -h * 0.3; g.add(st); }
+      const burnt = new THREE.Mesh(geo(new THREE.BoxGeometry(w + 0.03, h * 0.35, d * 0.5)), mats.char); burnt.position.set(0, h * 0.32, d * 0.2); g.add(burnt);
+      return g;
+    };
+    const vent = () => {
+      const g = new THREE.Group();
+      g.add(new THREE.Mesh(geo(new THREE.CylinderGeometry(0.09, 0.09, 0.7, 7)), mats.pipe));
+      const cap = new THREE.Mesh(geo(new THREE.ConeGeometry(0.2, 0.12, 7)), mats.char); cap.position.y = 0.42; g.add(cap);
+      const base = new THREE.Mesh(geo(new THREE.BoxGeometry(0.52, 0.1, 0.52)), mats.hub); base.position.y = -0.36; g.add(base);
+      return g;
+    };
+    // [mesh, local pos (x right, y up, z forward), local velocity, spin rate, size (bounce radius), trails fire]
+    const R = Math.random;
+    const list = [
+      [wheel(), [-Wd / 2, 0.46, 3.12], [-7, 9, 5], 9, 0.46, true],
+      [wheel(), [Wd / 2, 0.46, -1.75], [8, 11, -1.5], 11, 0.46, true],
+      [vent(), [-0.55, H, -2.4], [-1.5, 19, -2.5], 7, 0.35, true],
+      [panel(0.92, 0.3, 1.1, false), [0, H, 0.35], [2.5, 14, 3], 5, 0.3, true],
+      [panel(0.08, 1.7, 0.75, 'door'), [-Wd / 2 - 0.05, 1.5, 0.9], [-12, 7, 1.5], 6, 0.5, false],
+      [panel(0.07, 1.1, 1.9, true), [Wd / 2 + 0.05, 1.6, -2.6], [11, 8, 0], 5, 0.5, true],
+      [panel(0.07, 1.0, 1.5, true), [-Wd / 2 - 0.05, 1.7, -1.2], [-10, 10, -1], 6, 0.5, false],
+      [panel(1.6, 0.06, 1.4, false), [0.3, H + 0.05, -3.4], [3, 15, -1.5], 4, 0.4, true],
+      [panel(0.07, 0.8, 1.2, true), [Wd / 2 + 0.05, 1.4, 1.9], [9, 6, 4], 7, 0.4, false],
+    ];
+    for (let i = 0; i < 8; i++) {
+      const m = new THREE.Mesh(geo(new THREE.BoxGeometry(0.15 + R() * 0.35, 0.05 + R() * 0.12, 0.2 + R() * 0.4)), R() < 0.5 ? mats.char : mats.body);
+      const a = R() * Math.PI * 2;
+      list.push([m, [(R() - 0.5) * Wd, 1 + R() * 2, (R() - 0.5) * L * 0.8], [Math.cos(a) * (6 + R() * 8), 6 + R() * 10, Math.max(-3, Math.sin(a) * (6 + R() * 8))], 10, 0.12, false]);
+    }
+    for (const [mesh, lp, lv, spin, rad, trail] of list) {
+      mesh.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+      // RV-local → world (yaw only; forward = (sin yaw, cos yaw))
+      const wx = W.x + lp[0] * c + lp[2] * s, wz = W.z - lp[0] * s + lp[2] * c;
+      mesh.position.set(wx, W.y + lp[1], wz);
+      mesh.rotation.set(0, W.yaw, 0);
+      const vx = lv[0] * c + lv[2] * s, vz = -lv[0] * s + lv[2] * c;
+      const k = 0.85 + R() * 0.3;
+      W.group.add(mesh);
+      W.debris.push({
+        mesh, vx: vx * k, vy: lv[1] * k, vz: vz * k, rad, trail, rest: false, acc: 0,
+        wx: (R() - 0.5) * spin, wy: (R() - 0.5) * spin, wz: (R() - 0.5) * spin, burnT: trail ? 5 + R() * 6 : 1.5 + R() * 2,
+      });
+    }
+  }
+
+  _wreckUpdate(snap, dt, M) {
+    const W = this.wreck, P = this.particles, R = Math.random;
+    W.t += dt;
+    const t = W.t;
+    const scene = this.outer.parent, fx = scene && scene.userData.crFx;
+    // charring: the body goes black over ~0.6 s (a faint warm undertone)
+    const ck = Math.min(1, t / 0.6);
+    W.color.setRGB(1 - 0.84 * ck, 1 - 0.855 * ck, 1 - 0.865 * ck);
+    this.rig.tint(W.color);
+    for (const w of ['wheel_fl', 'wheel_rr']) this.rig.setScale(w, 0);
+    // secondary explosions
+    for (const b of W.booms) {
+      if (b.done || t < b[0]) continue;
+      b.done = true;
+      _v.set(b[2][0], b[2][1], b[2][2]).applyMatrix4(M);
+      if (fx) fx.explosion(_v.x, _v.y - 0.8, _v.z, b[1]);
+      if (this.onBoom) { try { this.onBoom(_v.x, _v.y, _v.z, b[1]); } catch (e) { /* */ } }
+    }
+    // the fire: strong for ~15 s, then a steady blaze
+    const blaze = t < 15 ? 1 : Math.max(0.55, 1 - (t - 15) / 40);
+    const L = this.size.l || 8.6, Wd = this.size.w || 2.6, H = this.size.h || 3.4;
+    const wind = 0.9;
+    W.acc.fire += dt * 55 * blaze;
+    while (W.acc.fire > 1) {
+      W.acc.fire -= 1;
+      // licks out of the windows / roof, biased to the coach box
+      const top = R() < 0.55;
+      const lx = top ? (R() - 0.5) * Wd * 0.8 : (R() < 0.5 ? -1 : 1) * (Wd / 2 + 0.05);
+      const ly = top ? H - 0.1 + R() * 0.2 : 1.5 + R() * 1.2;
+      const lz = -L * 0.45 + R() * L * 0.75;
+      _v.set(lx, ly, lz).applyMatrix4(M);
+      const out = top ? 0 : Math.sign(lx) * 1.2;
+      _v2.set(out, 0, 0).transformDirection(M);
+      // mostly solid orange flame bodies (normal blend keeps the colour), some additive hot spots
+      const hot = R() < 0.35;
+      P.spawn({ x: _v.x, y: _v.y, z: _v.z, vx: _v2.x * 1.4 + (R() - 0.5) * 0.8 + wind * 0.3, vy: 2.4 + R() * 2.2, vz: _v2.z * 1.4 + (R() - 0.5) * 0.8,
+        life: 0.55 + R() * 0.55, size: 1.1 + R() * 0.9, size1: 2.6 + R() * 1.8,
+        r: 1, g: hot ? 0.7 : 0.55, b: hot ? 0.3 : 0.12, r1: hot ? 0.7 : 0.3, g1: hot ? 0.14 : 0.08, b1: 0.03, alpha: hot ? 0.6 : 0.95,
+        cell: hot ? ATLAS.FLAME : ATLAS.PUFF, additive: hot, drag: 0.8, gravity: -1.2, spin: (R() - 0.5) * 2, fadeIn: 0.05 });
+    }
+    // inner glow (big soft orange billboards through the body)
+    const fl = 0.75 + 0.25 * Math.sin(t * 17) * Math.sin(t * 6.1 + 0.7);
+    for (const zz of [-2.6, 0, 2.4]) {
+      _v.set(0, H * 0.75, zz).applyMatrix4(M);
+      P.once({ x: _v.x, y: _v.y, z: _v.z, cell: ATLAS.GLOW, size: 6 * fl * blaze, r: 1, g: 0.4, b: 0.1, alpha: 0.4, additive: true });
+    }
+    // thick black smoke column
+    W.acc.smoke += dt * 16 * (0.6 + 0.4 * blaze);
+    while (W.acc.smoke > 1) {
+      W.acc.smoke -= 1;
+      _v.set((R() - 0.5) * Wd * 0.8, H + 0.4, -L * 0.4 + R() * L * 0.7).applyMatrix4(M);
+      const d = 0.05 + R() * 0.07;
+      P.spawn({ x: _v.x, y: _v.y, z: _v.z, vx: wind + (R() - 0.5) * 1.2, vy: 3.6 + R() * 2.4, vz: (R() - 0.5) * 1.2,
+        life: 6.5 + R() * 3, size: 2.2 + R() * 1.5, size1: 11 + R() * 7, r: d, g: d * 0.96, b: d * 0.92, alpha: 1,
+        cell: ATLAS.PUFF, drag: 0.12, gravity: -0.15, spin: (R() - 0.5) * 0.4, fadeIn: 0.4 });
+    }
+    // embers drifting up
+    W.acc.ember += dt * 14;
+    while (W.acc.ember > 1) {
+      W.acc.ember -= 1;
+      _v.set((R() - 0.5) * Wd, H * 0.6 + R() * H * 0.5, (R() - 0.5) * L * 0.8).applyMatrix4(M);
+      P.spawn({ x: _v.x, y: _v.y, z: _v.z, vx: wind * 1.5 + (R() - 0.5) * 2, vy: 3 + R() * 4, vz: (R() - 0.5) * 2, life: 1.5 + R() * 1.5, size: 0.22, size1: 0.06,
+        r: 1, g: 0.8, b: 0.35, r1: 1, g1: 0.3, b1: 0.05, cell: ATLAS.GLOW, additive: true, drag: 0.5, spin: 3 });
+    }
+    // ground fire patches around the wreck
+    for (let i = 0; i < 4; i++) {
+      const a = i * 1.7 + 0.4;
+      _v.set(Math.cos(a) * (Wd * 0.7 + 0.5), 0.15, Math.sin(a) * L * 0.42).applyMatrix4(M);
+      const f2 = 0.7 + 0.3 * Math.sin(t * 13 + i * 2.1);
+      P.once({ x: _v.x, y: W.y + 0.6, z: _v.z, cell: ATLAS.FLAME, size: 1.6 * f2 * blaze, r: 1, g: 0.6, b: 0.2, alpha: 0.85, additive: true });
+    }
+    if (fx) { _v.set(0, H + 3.5, 0).applyMatrix4(M); fx.burn = { x: _v.x, y: _v.y, z: _v.z, k: blaze }; }
+    // debris: ballistic, spin, bounce, then smoulder
+    const gy = (z) => { const s = fx && fx.track ? fx.track.surfaceY(z) : null; return s == null || !Number.isFinite(s) || Math.abs(s - W.y) > 3 ? W.y : s; };
+    for (const d of W.debris) {
+      const m = d.mesh;
+      d.burnT -= dt;
+      if (!d.rest) {
+        d.vy -= 9.81 * dt;
+        m.position.x += d.vx * dt; m.position.y += d.vy * dt; m.position.z += d.vz * dt;
+        m.rotation.x += d.wx * dt; m.rotation.y += d.wy * dt; m.rotation.z += d.wz * dt;
+        const g = gy(m.position.z) + d.rad * 0.5;
+        if (m.position.y < g) {
+          m.position.y = g;
+          if (Math.abs(d.vy) < 2.2) { d.rest = true; m.rotation.x = Math.round(m.rotation.x / Math.PI) * Math.PI; m.rotation.z = Math.round(m.rotation.z / (Math.PI / 2)) * (Math.PI / 2); m.position.y = gy(m.position.z) + d.rad * (d.rad > 0.4 ? 0.35 : 0.3); }
+          else { d.vy = -d.vy * 0.32; d.vx *= 0.55; d.vz *= 0.55; d.wx *= 0.5; d.wy *= 0.5; d.wz *= 0.5; if (P && d.rad > 0.25) this.dustBurst(m.position.x, g - 0.3, m.position.z, 5); }
+        }
+      }
+      // trails: fire + smoke while flying, smoulder after landing
+      const burning = d.burnT > 0;
+      d.acc += dt * (d.rest ? (burning ? 6 : 1.2) : 34);
+      while (d.acc > 1) {
+        d.acc -= 1;
+        const p = m.position;
+        if (burning && (d.trail || !d.rest)) P.spawn({ x: p.x, y: p.y + 0.1, z: p.z, vx: (R() - 0.5) * 0.6, vy: 1 + R(), vz: (R() - 0.5) * 0.6, life: 0.35 + R() * 0.3, size: d.rest ? 0.6 : 0.8, size1: 0.2, r: 1, g: 0.8, b: 0.35, r1: 1, g1: 0.3, b1: 0.05, cell: ATLAS.FLAME, additive: true });
+        const dd = 0.08 + R() * 0.08;
+        P.spawn({ x: p.x, y: p.y + 0.2, z: p.z, vx: wind * 0.6 + (R() - 0.5) * 0.4, vy: 1.2 + R(), vz: (R() - 0.5) * 0.4, life: d.rest ? 2.6 : 1.4, size: 0.5, size1: d.rest ? 2.6 : 1.8, r: dd, g: dd, b: dd * 0.95, alpha: d.rest ? 0.45 : 0.7, cell: ATLAS.PUFF, drag: 0.5 });
+      }
+    }
+  }
+
+  _wreckDispose() {
+    const W = this.wreck;
+    if (!W) return;
+    if (W.group) W.group.removeFromParent();
+    for (const g of W.geos || []) g.dispose();
+    for (const m of W.mats || []) m.dispose();
+    const fx = this.outer.parent && this.outer.parent.userData.crFx;
+    if (fx) fx.burn = null;
+  }
+
   sparks(x, y, z, power = 1) {
     const P = this.particles;
     const n = Math.round(10 + power * 24);
@@ -376,6 +598,7 @@ export class RvView {
   }
 
   dispose() {
+    this._wreckDispose();
     this.outer.removeFromParent(); this.rig.dispose();
     if (this.roof) for (const p of [this.roof.hatch, this.roof.hose, this.roof.tank, this.roof.doc]) p.rig.dispose();
   }

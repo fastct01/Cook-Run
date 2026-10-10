@@ -11,6 +11,9 @@
 //   view.setHourOverride(h|null)             // force the time of day (else snap.timeOfDay, else route keyframes)
 //   view.world                               // { chunks, structures, protos, layout } (VIEW-WORLD-A internals)
 //   view.setGarageExteriorVisible(bool)      // ONFOOT: hide the garage exterior while the interior is shown
+//   view.wrecked                             // [wreck] true once the RV blew up (EV.RV_EXPLODE or snap.rv.wrecked):
+//                                            // fireball + burning wreck, white flash, shake, and the built-in rig
+//                                            // switches to the 'wreck' orbit (shown when no camera controller holds it)
 //
 // If `audio` (from render/audio.js createAudio()) is passed, the view forwards
 // audio.update(snap, dt) every frame and audio.event(ev) for each event, using the
@@ -140,7 +143,7 @@ export class WorldView {
   }
 
   setCamera(mode) {
-    if (!['chase', 'rear', 'cinematic'].includes(mode)) return;
+    if (!['chase', 'rear', 'cinematic', 'wreck'].includes(mode)) return;
     this.cameraMode = mode;
     this.camRig.setMode(mode);
     this._updateOverlayMode();
@@ -237,6 +240,7 @@ export class WorldView {
       const evs = this.pendingEvents; this.pendingEvents = [];
       for (const ev of evs) this._event(ev, snap);
     }
+    if (rv.wrecked && !this.wrecked) this._wreck({ type: EV.RV_EXPLODE, x: rv.x, y: rv.y, z: rv.z, yaw: rv.yaw }, snap, true);
     this.rv.update(snap, dt);
     if (this.cameraController) this.cameraController.update(dt, this.camera, snap);
     else this.camRig.update(dt, rv, snap.feel || {});
@@ -369,6 +373,9 @@ export class WorldView {
       case EV.FELL:
         this.camRig.shake(0.8);
         break;
+      case EV.RV_EXPLODE:
+        this._wreck(ev, snap, false);
+        break;
       case EV.GADGET:
         if (ev.gadget === 'smoke') this._smokeBurst(ev.x ?? rv.x, ev.z ?? rv.z);
         if (ev.gadget === 'nitro') this.camRig.shake(0.2);
@@ -377,6 +384,27 @@ export class WorldView {
     }
     // expansion events (canister, roofHit, setpiece, …) also go to the effects layer
     try { this.fx?.event?.(ev, snap); } catch (e) { /* fx is best-effort */ }
+  }
+
+  // [wreck] the RV blew up (event, or the snapshot flag when the event was missed — then `late`
+  // also plays the boom). Visuals live in RvView.explode / Fx.explosion; here: flash, shake, camera.
+  _wreck(ev, snap, late) {
+    if (this.wrecked) return;
+    this.wrecked = true;
+    const rv = snap.rv || {};
+    const e = { x: ev.x ?? rv.x, y: ev.y ?? rv.y, z: ev.z ?? rv.z, yaw: ev.yaw ?? rv.yaw };
+    this._flashK = 1;
+    this.camRig.shake(1.6);
+    this.rv.onBoom = (x, y, z, p) => {
+      if (p < 1) this.camRig.shake(Math.min(1.6, 0.5 + p * 0.9));
+      if (p < 1 && this.audio) { try { this.audio.play?.('explosion', p); } catch (er) { /* */ } }
+      if (p < 1) this._flashK = Math.max(this._flashK || 0, 0.25 * p);
+    };
+    this.rv.explode(e);
+    if (late && this.audio) { try { this.audio.event({ type: EV.RV_EXPLODE, ...e }, snap); } catch (er) { /* */ } }
+    this.camRig.setWreck(e);
+    this.cameraMode = 'wreck';
+    this._updateOverlayMode();
   }
 
   _smokeBurst(x, z) {
@@ -444,6 +472,8 @@ export class WorldView {
         background:radial-gradient(ellipse at 28% 62%, rgba(175,225,120,.28), rgba(175,225,120,0) 48%),
                    radial-gradient(ellipse at 72% 38%, rgba(150,215,110,.24), rgba(150,215,110,0) 44%),
                    radial-gradient(ellipse at 50% 85%, rgba(140,200,100,.2), rgba(140,200,100,0) 40%)"></div>
+      <div class="cr-flash" style="position:absolute;inset:0;opacity:0;display:none;
+        background:radial-gradient(ellipse at 50% 48%, #fffdf2 0%, #fff1c8 30%, #ffb35a 70%, #e0561c 100%)"></div>
       <div class="cr-rear" style="position:absolute;inset:0;display:none">
         <svg viewBox="0 0 1600 900" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%">
           <defs>
@@ -483,6 +513,7 @@ export class WorldView {
     this.ovFumes = o.querySelector('.cr-fumes');
     this.ovFumes2 = o.querySelector('.cr-fumes2');
     this.ovRear = o.querySelector('.cr-rear');
+    this.ovFlash = o.querySelector('.cr-flash');
     this.ovFresh = o.querySelector('.cr-fresh');
     this.ovCurtL = o.querySelector('.cr-curtL');
     this.ovCurtR = o.querySelector('.cr-curtR');
@@ -510,6 +541,13 @@ export class WorldView {
     const op = k > 0 ? (0.55 + 0.45 * Math.sin(this.time * 2.2) * 0.3) * k : 0;
     this.ovFumes.style.opacity = op.toFixed(3);
     this.ovFumes2.style.opacity = (k * 0.8).toFixed(3);
+    // [wreck] blast flash: instant, ~0.6 s fade
+    if (this.ovFlash && (this._flashK > 0 || this._flashShown)) {
+      const f = this._flashK = Math.max(0, (this._flashK || 0) - dt * 1.8);
+      this._flashShown = f > 0;
+      this.ovFlash.style.display = f > 0 ? 'block' : 'none';
+      this.ovFlash.style.opacity = Math.min(1, f * f * 1.1).toFixed(3);
+    }
     if (k > 0) this.ovFumes2.style.transform = `translate(${Math.sin(this.time * 0.9) * 2}%, ${Math.cos(this.time * 0.7) * 2}%) scale(${1 + Math.sin(this.time * 1.3) * 0.03})`;
     if (this.cameraMode === 'rear') {
       const lat = (snap.feel && snap.feel.latAcc) || 0;

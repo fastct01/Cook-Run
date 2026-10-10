@@ -343,13 +343,20 @@ export class Autopilot {
     const front = rv.z + 4.3;
     const blockers = [];
     let pedAhead = false, copBehind = 99, rivalNear = 99, waitHard = false, pedCrawl = Infinity;
+    // the Midnight Comet's convoy (scripted cop cars chasing HIM): not our tail, no gadgets for them
+    let convoy = null;
+    for (const sp of snap.setpieces || []) {
+      if (sp.type !== 'midnight_comet' || !Array.isArray(sp.ids)) continue;
+      convoy = convoy || new Set();
+      for (const id of sp.ids) convoy.add(id);
+    }
     for (const e of snap.ents) {
       const kind = KIND[e[1]];
       const dx = e[2] - rv.x, dz = e[4] - rv.z;
       const along = dx * s + dz * c;
       const st = e[7];
       if (COPS.has(kind)) {
-        if (st === 1 && along < 0 && along > -40) copBehind = Math.min(copBehind, -along);
+        if (st === 1 && along < 0 && along > -40 && !(convoy && convoy.has(e[0]))) copBehind = Math.min(copBehind, -along);
       }
       if (kind === 'rival' && st === 0 && Math.hypot(dx, dz) < 18) rivalNear = Math.min(rivalNear, Math.hypot(dx, dz));
       if (kind === 'heli' || kind === 'chopper' || kind === 'kestrel' || kind === 'sgt_pratt' || kind === 'comet_hero') continue;
@@ -357,6 +364,13 @@ export class Autopilot {
       // things entirely behind the RV's centre can't block it going forward
       if (along + extent < -0.5 || along > look + 80) continue;
       const eu = road.uAt(e[2], e[4]);
+      // the Comet / his convoy coming past (from 45 m behind to level with us): their lane is
+      // taken — never steer into it (they keep clear of OUR lane, so it never blocks where we are)
+      if (convoy && convoy.has(e[0]) && along > -45 && along < 12) {
+        const [cw, cl] = VEH[kind] || [1.0, 2.5];
+        blockers.push({ kind, u: eu, hw: cw, d: 0, end: along + cl, vAlong: 0, soft: false, w: 1, stat: false, conv: true });
+        continue;
+      }
       if (kind === 'ped') {
         // the bot leans on the horn instead of braking for pedestrians (they panic and run)
         // (out to ~70 m and the far sidewalk: a runner waiting at the kerb stays put when it hears the horn)
@@ -451,6 +465,7 @@ export class Autopilot {
       for (const b of blockers) {
         const range = b.vAlong < -1 ? Math.max(look + Math.min(80, -b.vAlong * 2.5), oncLook) : look;
         if (b.d > range) continue;
+        if (b.conv && Math.abs(cu - rvU) < 0.8) continue;
         let rel = over(b, cu, cu);
         if (!rel && b.d < dPass && !over(b, rvU, rvU)) rel = over(b, lo, hi);
         if (!rel) continue;

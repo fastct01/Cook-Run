@@ -79,7 +79,7 @@
 // Entity states: see protocol.js; cops 6 soaked, 7 stalled, 8 paint-blind; flashbang
 //   0 flying (y>0) · 1 armed on the ground · 2 burst, variant 0 flash · 1 foam.
 // ─────────────────────────────────────────────────────────────────────────────
-import { KIND_ID } from '../shared/protocol.js';
+import { KIND_ID, EV } from '../shared/protocol.js';
 import { Track } from './track.js';
 import { Rng, hashSeed } from './rng.js';
 import { Road } from './road.js';
@@ -337,12 +337,12 @@ export class GameSim {
     if (rv.grace > 0 && cause !== 'fall') return;
     rv.hp = Math.max(0, rv.hp - amount);
     this.lastDamageT = this.t;
+    if (rv.hp <= 0) { this.lose('wrecked'); return; }   // the blast beats the crew's bruises: it's a wreck
     if (!noCrew) {
       const share = this.cfg.rv.crewCrashShare ?? 0.08;
       this.hurtDriver(amount * share);
       this.labLink.hurtCook(amount * share);
     }
-    if (rv.hp <= 0) this.lose('wrecked');
   }
 
   pushRv(dx, dz, speedLoss = 0) {
@@ -444,9 +444,22 @@ export class GameSim {
     const texts = {
       wrecked: 'The RV is wrecked!', busted: 'BUSTED!', crewDown: 'Rook passed out at the wheel!',
     };
+    if (reason === 'wrecked') this._wreck();
     if (texts[reason]) this.emit({ type: 'msg', text: texts[reason], tone: 'bad' });
     this.result = this.scoring.buildResult(false, reason);
     this.emit({ type: 'end', result: this.result });
+  }
+
+  // hp hit 0: the RV blows up. EV.RV_EXPLODE goes out BEFORE the end event (renderers start the
+  // explosion, the end screen waits for it). The blast kills most of the speed (the visual hop is the
+  // renderer's); after the end the sim keeps stepping (handbrake on, phase 'lost') so the wreck settles.
+  _wreck() {
+    const rv = this.rv;
+    rv.wrecked = true;
+    rv.nitroT = 0;
+    this.emit({ type: EV.RV_EXPLODE, x: rv.x, y: rv.y, z: rv.z, yaw: rv.yaw });
+    rv.vx *= 0.3; rv.vz *= 0.3;
+    rv.speed = rv.vx * Math.sin(rv.yaw) + rv.vz * Math.cos(rv.yaw);
   }
 
   win() {
@@ -835,6 +848,7 @@ export class GameSim {
         hp: rv.hp, airborne: rv.airborne, nitro: clamp(rv.nitroT / (R.nitroSeconds || 1), 0, 1), flatTyre: rv.flatT > 0,
         onRoad: rv.onRoad, zone: rv.zone, drift: rv.drift, handbrake: !!rv.handbrake, horn: !!rv.horn, grace: rv.grace,
         regen: !!rv.regen, roofDoc: !!rv.roofDoc, slip: rv.slipT > 0, foam: rv.foamT > 0, shock: rv.shockT > 0,
+        ...(rv.wrecked ? { wrecked: true } : null),
       },
       crew: { driver: this.crew.driver, cook: this.crew.cook, cookDown: this.crew.cookDown },
       heat: { value: heat.value, stars: heat.stars, seen: heat.seen, gaveUp: heat.gaveUp, unseen: Math.min(99, heat.unseenT) },

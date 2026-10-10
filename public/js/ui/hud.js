@@ -47,7 +47,7 @@ const END_TITLE = {
 // Set-piece captions (EV.setpiece kind → [title, subtitle]). All original; no real brands or characters.
 export const SETPIECE_CAPTIONS = {
   freight_wagons: ['RUNAWAY FREIGHT!', 'Wagons rolling across the yard'],
-  midnight_comet: ['THE MIDNIGHT COMET!', 'Six cop cars just found someone faster'],
+  midnight_comet: ['THE MIDNIGHT COMET!', 'Six cop cars on his tail — and he just saluted you'],
   parade: ["FOUNDERS' DAY PARADE!", 'Main Street is shut — take the market alley'],
   drawbridge: ['DRAWBRIDGE RISING!', 'Floor it — or wait it out'],
   wide_load: ['WIDE LOAD!', 'A whole house on a truck'],
@@ -354,7 +354,8 @@ export class Hud {
     }
     const nitro = snap.rv?.nitro || 0;
     set('nitroM', Math.round(nitro * 40), () => { const e = this.$('.crh-g--nitro'); e.classList.toggle('active', nitro > 0); e.querySelector('.crh-nitro-meter i').style.width = (nitro * 100).toFixed(0) + '%'; });
-    // speedometer
+    // speedometer (gone once the RV has blown up: the wreck camera needs the bottom of the screen)
+    set('wrecked', !!snap.rv?.wrecked, (v) => { const e = this.$('.crh-bc'); if (e) e.style.visibility = v ? 'hidden' : ''; });
     const kmh = Math.abs(snap.rv?.speed || 0) * 3.6;
     const a = this._ang(Math.min(this.speedMax * 1.03, kmh));
     set('spd', Math.round(kmh * 2), () => { this.speedNeedle.setAttribute('transform', `translate(100 100) rotate(${a.toFixed(1)})`); this.speedNum.textContent = Math.round(kmh); });

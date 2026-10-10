@@ -36,6 +36,8 @@ import { showLobby } from './ui/lobby.js';
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const STEP = 1 / 60;
+const WRECK_END_MS = 3000;   // a wrecked RV: the end screen waits for the explosion
+const endDelay = (r) => (r?.won ? 1600 : r?.reason === 'wrecked' ? WRECK_END_MS : 1200);
 const MAX_STEPS_PER_FRAME = 6;
 const randomSeed = () => (Math.random() * 0xffffffff) >>> 0;
 const LAB2D = params.has('lab2d');
@@ -328,14 +330,20 @@ class Session {
         this.hud.update(m.s);
         this.lab?.applySnapshot(m.s);
         // fallback if the END message is ever lost: the sim also emits an 'end' event in snapshots
+        if (m.s.rv?.wrecked) this.onWrecked();
         if (!this.ended && (m.s.phase === 'won' || m.s.phase === 'lost')) {
           const ev = (m.s.events || []).find((e) => e.type === 'end');
-          if (ev?.result) { this.ended = true; setTimeout(() => { if (!this.destroyed) this.showEnd(ev.result); }, 1200); }
+          if (ev?.result) { this.ended = true; setTimeout(() => { if (!this.destroyed) this.showEnd(ev.result); }, endDelay(ev.result)); }
         }
         break;
       case GM.LAB: if (this.isHost && !this.localTakeover) this.sim.setLabState(m.l); break;
       case GM.CMD: if (this.isHost && !this.localTakeover) this.sim.applyCookCommand(m.c); break;
-      case GM.END: if (!this.isHost && !this._endShown) this.showEnd(m.result); break;
+      case GM.END:
+        if (this.isHost || this._endShown) break;
+        // a wrecked RV: let the explosion play before the end screen (the snapshots keep coming)
+        if (m.result?.reason === 'wrecked') { this.ended = true; this.onWrecked(); clearTimeout(this._endT); this._endT = setTimeout(() => { if (!this.destroyed) this.showEnd(m.result); }, WRECK_END_MS); }
+        else this.showEnd(m.result);
+        break;
       case GM.CHAT: if (m.text) this.hud.toast(String(m.text).slice(0, 60), 'info'); break;
       default: break;
     }
@@ -471,6 +479,7 @@ class Session {
       }
     }
 
+    if (sim.rv.wrecked) this.onWrecked();
     this.fp?.update(this.paused ? 0 : dt, snap, this._lastInput);
     this.hud.setLookCooldown?.(this.fp?.active ? this.fp.cooldown : null);
     if (render) this.view.render(this.paused ? 0 : dt);
@@ -482,7 +491,28 @@ class Session {
         this.net.sendGame({ k: GM.SNAP, s: sim.netSnapshot() });
         this.net.sendGame({ k: GM.END, result });
       }
-      setTimeout(() => { if (!this.destroyed) this.showEnd(result); }, result.won ? 1600 : 1200);
+      setTimeout(() => { if (!this.destroyed) this.showEnd(result); }, endDelay(result));
+    }
+  }
+
+  // The RV blew up (both roles, once): leave the cab / the lab so the outside wreck camera
+  // (WorldView switches its rig to 'wreck') shows the explosion. In the lab Doc first gets the
+  // flash + fire inside (VanLab3D), then the view pulls out.
+  onWrecked() {
+    if (this._wrecked || this.destroyed) return;
+    this._wrecked = true;
+    this.input?.clear();
+    audio.horn?.(false);
+    if (this.shop) { try { this.shop.destroy(); } catch (e) { console.warn(e); } this.shop = null; document.body.classList.remove('in-shop'); }
+    this.fp?.setActive(false);
+    this.hud.setFirstPerson?.(false);
+    if (this.van?.active) {
+      this._wreckT = setTimeout(() => {
+        if (this.destroyed || !this.van?.active) return;
+        this.inLab = false;
+        this.van.setActive(false);
+        document.body.classList.remove('in-lab');
+      }, 900);
     }
   }
 

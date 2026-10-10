@@ -985,7 +985,8 @@
    "area": "downtown",
    "z": 5600,
    "pullSeconds": 60,
-   "desc": "The Midnight Comet crosses an intersection with 6 cop cars; your cops follow him for 60 s"
+   "alongSeconds": 5,
+   "desc": "The Midnight Comet comes up beside the RV with 6 cop cars in tow, drives parallel for a few seconds, then boosts off down the road; your cops follow him for 60 s"
   },
   {
    "id": "parade",

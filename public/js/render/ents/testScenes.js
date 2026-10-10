@@ -284,18 +284,24 @@ export function makeScene(name, data, track, opts = {}) {
     };
   }
 
-  // ── the Midnight Comet pulling 6 cop cars through downtown ──────────────
+  // ── the Midnight Comet: comes up beside the RV with 6 cop cars in tow, salutes, rockets off ──
+  // 12 s loop: 0–3 s catching up (state 1), 3–8 s alongside (2 = salute from 4 s to 7 s), 8 s+ afterburner (3)
   if (name === 'comet') {
-    const z0 = opts.z ?? 5600;
+    const z0 = opts.z ?? 5600, V = 20, rvU = 1.7, cU = 5.65;
     return {
       snapshot(T) {
-        const zc = z0 - 40 + T * 24;
-        const out = [along('cm', 'comet_car', zc, -1.7 + Math.sin(T * 0.8) * 1.2, 0, Math.cos(T * 0.8) * 0.06)];
-        for (let i = 0; i < 6; i++) out.push(along('cp' + i, i % 3 === 2 ? 'cop_suv' : 'cop', zc - 11 - i * 9, (i % 2 ? 1.7 : -1.7) + Math.sin(T + i) * 0.8, 0, 0, 0, 1));
-        out.push(along('hero', 'comet_hero', z0 + 30, 7.5, 0, -Math.PI / 2));
-        return base(T, rvAt(z0 - 90, 1.8, 0), out, { setpieces: [{ id: 'comet', type: 'midnight_comet', phase: 'active', t: T }] });
+        const t = T % 12, zr = z0 - 60 + t * V;
+        // comet offset from the RV centre along the road
+        const off = t < 3 ? -40 + 41 * (1 - (1 - t / 3) ** 2) : t < 8 ? 1 : 1 + 0.5 * 15 * (t - 8) ** 2;
+        const st = t < 3 ? 1 : t < 8 ? (t >= 4 && t < 7 ? 2 : 0) : 3;
+        const out = [along('cm', 'comet_car', zr + off, cU, 0, 0, 0, st)];
+        for (let i = 0; i < 6; i++) {
+          const lag = t < 8 ? 0 : 0.5 * 9 * (t - 8) ** 2;   // the cops can't keep up
+          out.push(along('cp' + i, i % 3 === 2 ? 'cop_suv' : 'cop', zr + off - 11 - i * 8.6 - lag, cU + Math.sin(T * 0.9 + i * 1.7) * 0.25, 0, 0, 0, 1));
+        }
+        return base(T, rvAt(zr, rvU, V), out, { setpieces: [{ id: 'comet', type: 'midnight_comet', phase: t < 3 ? 'approach' : t < 8 ? 'alongside' : 'boost', t, side: 1, dir: 1 }] });
       },
-      camera(T) { const zc = z0 - 40 + T * 24; return camSide(zc + 9, 8.5, 2.6, zc - 12, 0, 1.2, 62); },
+      camera(T) { const t = T % 12, zr = z0 - 60 + t * V; return t < 8 ? camSide(zr + 7, -2.6, 2.4, zr - 2, cU, 1.5, 62) : camSide(zr - 14, 1.7, 4.5, zr + 25, 3, 1.5, 60); },
     };
   }
 

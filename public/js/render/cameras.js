@@ -6,6 +6,8 @@
 //  'rear'      – cook's view: inside the RV at the rear window looking BACK down
 //                the road (window-frame overlay is a DOM element, see WorldView).
 //  'cinematic' – manual: setCinematic({ pos, target, fov }) or a slow orbit.
+//  'wreck'     – the RV blew up: setWreck({ x, y, z, yaw }) — starts close behind-left, pulls back
+//                and up over ~3 s while slowly orbiting, framing the wreck and its smoke column.
 // ─────────────────────────────────────────────────────────────────────────────
 import * as THREE from 'three';
 
@@ -42,6 +44,11 @@ export class CameraRig {
     this.first = true;
   }
   shake(amount) { this.shakeAmt = Math.min(1.6, Math.max(this.shakeAmt, amount)); }
+  setWreck({ x = 0, y = 0, z = 0, yaw = 0 } = {}) {
+    this.wreck = { x, y, z, yaw, t: 0 };
+    this.mode = 'wreck';
+    this.first = true;
+  }
   setCinematic({ pos, target, fov, orbit } = {}) {
     if (pos) this.cin.pos.copy(pos);
     if (target) this.cin.target.copy(target);
@@ -57,6 +64,7 @@ export class CameraRig {
     const fwdX = Math.sin(rv.yaw), fwdZ = Math.cos(rv.yaw);
     if (this.mode === 'rear') return this._rear(dt, rv, feel);
     if (this.mode === 'cinematic') return this._cinematic(dt, rv);
+    if (this.mode === 'wreck' && this.wreck) return this._wreckCam(dt, rv);
 
     // ── chase ──
     const sp = Math.max(0, rv.speed || 0);
@@ -112,14 +120,15 @@ export class CameraRig {
     if (Math.abs(cam.fov - this.fov) > 0.01) { cam.fov = this.fov; cam.updateProjectionMatrix(); }
   }
 
-  _applyShake(dt) {
+  _applyShake(dt, gain = 1) {
     if (this.shakeAmt <= 0.001) return;
     this.shakeT += dt;
-    const a = this.shakeAmt;
+    const a = this.shakeAmt * gain;
     const t = this.shakeT * 38;
     this.camera.position.x += (Math.sin(t * 1.1) + Math.sin(t * 2.3) * 0.5) * 0.16 * a;
     this.camera.position.y += (Math.sin(t * 1.7 + 1) + Math.sin(t * 3.1) * 0.4) * 0.12 * a;
     this.camera.rotateZ(Math.sin(t * 1.3) * 0.02 * a);
+    if (gain > 1) this.camera.rotateX(Math.sin(t * 0.9 + 2) * 0.012 * a);
     this.shakeAmt = Math.max(0, this.shakeAmt - dt * 2.2);
   }
 
@@ -147,6 +156,40 @@ export class CameraRig {
     cam.rotateZ(this.rearRoll);
     this._applyShake(dt);
     const fovT = 70;
+    if (Math.abs(cam.fov - fovT) > 0.01) { cam.fov = fovT; cam.updateProjectionMatrix(); }
+  }
+
+  _wreckCam(dt, rv) {
+    const cam = this.camera, w = this.wreck;
+    w.t += dt;
+    const k = smooth(Math.min(1, w.t / 3.2));
+    const cx = rv.x, cy = rv.y || 0, cz = rv.z;
+    // behind, swung out toward the road's centre line (open road, not the sidewalk / buildings),
+    // pulling back and up; it slowly swings in behind the wreck
+    if (w.side == null) {
+      const lx = Math.cos(w.yaw), lz = -Math.sin(w.yaw);         // left of the heading
+      const ccx = this.track.centerX(w.z);
+      w.side = (ccx - w.x) * lx >= 0 ? 1 : -1;
+      if (Math.abs(ccx - w.x) < 1.5) w.side = 1;
+    }
+    const a = Math.max(0.15, 0.42 - w.t * 0.02) * w.side;
+    const dist = 13 + 8 * k, up = 3.6 + 4.6 * k;
+    const fx = Math.sin(w.yaw), fz = Math.cos(w.yaw), lx = Math.cos(w.yaw), lz = -Math.sin(w.yaw);
+    const back = Math.cos(a) * dist, lat = Math.sin(a) * dist;
+    const desired = _v.set(cx - fx * back + lx * lat, cy + up, cz - fz * back + lz * lat);
+    const lookT = _v2.set(cx, cy + 1.2 + 2.2 * k, cz);
+    if (this.first) { this.pos.copy(desired); this.look.copy(lookT); this.first = false; }
+    dampV(this.pos, desired, 5, dt);
+    dampV(this.look, lookT, 5, dt);
+    const gy = this.track.surfaceY(this.pos.z);
+    const minY = (gy == null ? cy : Math.max(gy, 0)) + 1.6;
+    if (this.pos.y < minY) this.pos.y = minY;
+    cam.position.copy(this.pos);
+    cam.up.set(0, 1, 0);
+    cam.lookAt(this.look);
+    this._applyShake(dt, 2.4);   // the blast: much harder than a crash
+    const fovT = 60;
+    this.fov = fovT;
     if (Math.abs(cam.fov - fovT) > 0.01) { cam.fov = fovT; cam.updateProjectionMatrix(); }
   }
 
