@@ -282,6 +282,21 @@ export class Autopilot {
       return inp;
     }
     this.shopT0 = null;
+    // Round 3: boxed in away from a stop (drawbridge, roadblock, a jam) with the bust meter filling: send the AI
+    // Rook up for a few seconds (DEFEND works anywhere the RV stands still), then call him down and drive on
+    const R = snap.roof;
+    if (stop) this.lastStopT = snap.t;   // (a stop that just ended: drive off, don't climb straight back up)
+    if (this.autoDefend && this.onDriverCommand && R && !(snap.t - (this.lastStopT ?? -99) < 8)) {
+      // only when really stuck (stopped 6+ s, e.g. waiting at the drawbridge) — crawling in traffic, driving on drains it
+      if (!R.active && R.available && (snap.rv.stopped ?? 0) > 6 && Math.abs(snap.rv.speed) < 0.5 && snap.bust > 0.15 && snap.t - this.defendSentT > 3) {
+        this.defendSentT = snap.t; this.roadDefendT = snap.t; this.stats.defendSent++;
+        this.onDriverCommand({ type: 'defend', on: true, ai: true });
+      } else if (R.active && this.roadDefendT != null && snap.t - this.roadDefendT > 7 && snap.bust < 0.3 && !R.climbing) {
+        this.roadDefendT = null;
+        this.onDriverCommand({ type: 'defend', on: false });
+      }
+      if (!R.active && this.roadDefendT != null && snap.t - this.roadDefendT > 3) this.roadDefendT = null;
+    }
     const pastGap = br && rv.z > br.gapEnd;
     if (pastGap && snap.sell && rv.z > this.sell.z - 220) mode = 'sell';
     const jump = br && !pastGap && br.lip - rv.z < 320 && br.lip - rv.z > -5;

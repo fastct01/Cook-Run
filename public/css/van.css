@@ -126,6 +126,8 @@
 
 /* ── right column: lab air, pantry, result ──────────────────────────────── */
 .vh-right { position: absolute; right: var(--vh-m); top: 116px; width: var(--vh-side); display: flex; flex-direction: column; gap: 8px; }
+/* the HUD's tag column (Rook chip + "cops on the way") stacks above us: step down one row when the second tag shows */
+body:has(.crh-tag--cops:not([style*="none"])) .vh-right { top: 150px; }
 .vh-air { padding: 10px 12px 12px; }
 .vh-air header, .vh-pantry header, .vh-result header { display: flex; justify-content: space-between; align-items: center; }
 .vh-m { display: flex; align-items: center; gap: 8px; height: 16px; margin-top: 8px; }

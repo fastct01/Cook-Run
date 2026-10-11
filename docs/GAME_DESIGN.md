@@ -19,7 +19,7 @@
 ---
 
 ## Contents
-0. [The 40-minute version: what changed](#0-the-40-minute-version-what-changed)
+0. [Round 3: what changed](#0-round-3-what-changed-newest-first) · [The 40-minute version: what changed](#0-the-40-minute-version-what-changed)
 1. [Pitch & core loop](#1-pitch--core-loop)
 2. [Players & roles](#2-players--roles)
 3. [Win, lose & scoring](#3-win-lose--scoring)
@@ -34,6 +34,28 @@
 12. [Risks & open questions](#12-risks--open-questions)
 
 ---
+
+## 0. Round 3: what changed (newest first)
+
+Round 3 was planned in the "Round 3 plan" doc (16 decisions plus three answers from the user) and split between
+eight agents by `ROUND3_CONTRACT.md`. Each module's notes are in `docs/NOTES-r3-build-*.md`.
+
+| Area | Now | Data / code |
+|---|---|---|
+| Roles at a stop | **Doc** jumps out of the side door and runs the shop task **in first person** (35–40 % shorter timers). **Rook** stays with the RV and defends it from the roof | `onfoot/shops/` (FpShop), `sim/stops.js` (`doc: in/out/back`, `CMD.shopEnter/Done/Abort`) |
+| Cops at stops | Someone always calls it in. Parking raises the heat to at least 1★ and sends 1 / 2 / 3 cars (Easy / Hard / Extreme) | `rules.json › stops.response`, `sim/cops.js` |
+| DEFEND | **F** or the button. It works while the RV stands still with a cop within 40 m and 1★ or more, or at any stop. Rook climbs onto the roof with a revolver (3 hits stall a car), a pump shotgun (bursts a tyre), a scoped rifle (a radiator hit steams and stalls the car) and the throwables (firecracker, paint balloon, smoke flare). Shots hit police cars only. Every shot adds heat. Ammo refills at stops | `rules.json › defend`, `sim/roof.js`, `defend/`, `render/ents/copDamage.js`, `gunfx.js`, `rookRoof.js` |
+| Busts | Stopping never busts at once. The bust meter needs the RV stopped longer than the grace period (5 / 3 / 1.5 s), then a running cop beside it for 6 / 4 / 2.5 s. Disabled cars (tyre out, radiator, stalled, blinded) never count | `rules.json › heat.bust.grace/seconds`, `sim/heat.js` (`rv.stopped`, `bustInfo`) |
+| Cops fire back | On every difficulty, more on harder ones. Return fire while Rook is on the roof (hull and Rook). Chase fire at the moving RV from 5 / 4 / 3★ | `rules.json › defend.copFire`, `sim/cops.js` |
+| Health | All three bars (hull, Rook, Doc) heal 0.45 / 0.3 / 0.15 HP/s after 6 / 10 / 15 s without damage to that bar, never from zero | `rules.json › rv.regenPerSec/regenDelay`, `sim/GameSim.js` |
+| Difficulty | Easy / Hard / Extreme. Hard is the standard game. About 30 levers in one block (cops, heat, bust, regen, damage, density, cooking, shops, ammo, look-around, bags 4 / 6 / 8, start gadgets, canyon penalty, score ×0.75 / 1 / 1.5). Picked on the title (solo) or by the host in the room, and locked at Start | `rules.json › difficulty`, `shared/difficulty.js` (`withDifficulty`) |
+| Doc | Cooks in first person: mouse-look, WASD, look at a bench + E, gloved hands, a full-height van. **O** switches to the old cut-away overview and **V** works the vent fan. He no longer climbs onto the roof | `van/VanLab3D.js`, `van/vanCamera.js`, `onfoot/fpHands.js` |
+| Cab | A realistic 1980s four-spoke wheel. The hands grip it and re-grip, and wear blue suit gloves after Suit up. PRNDL pointer, warning lamps, a radio dial with the area name. A jiggling hula girl, a mint freshener and fuzzy dice on springs, coffee and a phone | `render/fp/cabR3.js`, `trinkets.js`, asset `rv_cab_fp_r3` |
+| Garage | A 7-step tutorial with **Suit up**. Chemistry gear and protective apparel line the walls. Floor chevrons and a floating OUT arrow show the way out | `sim/garage.js`, `onfoot/GarageView.js`, `render/world/startDistrict.js` |
+| Start district | Tow yard, tyre shop, diner, corner mart, tank farm, pumpjacks, water tower, pipe bridge, utility poles around the garage, with sim colliders | `render/world/startDistrict.js`, `sim/structures.js` |
+| Rook | A young adult of about 20 in a beanie and an oversized red hoodie, everywhere (`driver` → `rook_young`) | `assets/index.js` |
+| Interface | "Dark glass": near-black see-through panels, Archivo + Fraunces, standard icons. A heat slider under the stars, map pins on the route strip, a pulsing + on healing bars, the DEFEND button with a cop ring, Doc's shop chip, and a difficulty tile on the end screen | `css/tokens.css`, `ui/hud.js`, `docs/r3/ui/*.png` |
+| Title | The desert title is back and live: cars both ways, tumbleweeds, pumpjacks, vultures, and every 18 s the RV wiggling past, smoking (every other time with a cop behind). The same scene is the loading screen | `ui/titleScene.js`, `ui/lobby.js`, `index.html #boot` |
 
 ## 0. The 40-minute version: what changed
 

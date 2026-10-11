@@ -10,16 +10,21 @@
 //                  runs the full-size lab. Sends LabState at rules.net.labHz + commands immediately.
 //
 // 40-minute version: every game opens on foot in Rook's Garage (onfoot/GarageView + sim/garage.js), the
-// driver drives in first person (render/fp, C = 3 s look-around), supply stops send Rook into a shop challenge
-// (onfoot/shops) while Doc climbs onto the roof (van/roof, inside VanLab3D).
+// driver drives in first person (render/fp, C = 3 s look-around).
+// Round 3 (ROUND3_CONTRACT.md): at a supply stop Doc jumps out of the side door and plays the shop run in first
+// person (onfoot/shops, on the cook's computer — or the solo host's), while Rook defends the RV from the roof with
+// the guns (F / DEFEND → defend/DefendClient + sim/roof.js; solo stops: the AI Rook). Doc cooks in first person
+// (VanLab3D, O = cut-away overview). Every session runs on withDifficulty(data, level) (Easy / Hard / Extreme).
 // Unity mapping: this file ≈ a GameBootstrap + SessionController MonoBehaviour.
-// The cook plays in a 3D cut-away van (js/van/VanLab3D.js): Doc walks between stations and cooks
-// on 3D props. Solo: Tab swaps seats — while you cook, Rook (AI) cruises (no stops, no jump).
+// Solo: Tab swaps seats — while you cook, Rook (AI) cruises (no stops, no jump).
 // URL flags: ?lab2d=1 flat 2D lab panel instead of the 3D van · ?demo=1 bot driver + bot cook (2D) ·
-//            ?auto=1 bot driver online · ?autocook=1 bot cook online (2D) · ?seed=N · ?solo=1 · ?touch=1
+//            ?auto=1 bot driver online · ?autocook=1 bot cook online (2D) · ?seed=N · ?solo=1 · ?touch=1 ·
+//            ?difficulty=easy|hard|extreme (with ?solo / ?demo)
 // ─────────────────────────────────────────────────────────────────────────────
 import { loadData } from './data/loadData.js';
-import { GM, DCMD } from './shared/protocol.js';
+import { GM, DCMD, CMD } from './shared/protocol.js';
+import { withDifficulty, normDifficulty } from './shared/difficulty.js';
+import { DefendClient } from './defend/DefendClient.js';
 import { GameSim } from './sim/GameSim.js';
 import { Autopilot } from './sim/autopilot.js';
 import { WorldView } from './render/WorldView.js';
@@ -55,6 +60,7 @@ let data;
 try {
   if (!hasWebGL2()) throw new Error('nogl');
   data = await loadData();
+  window.__bootProgress?.(0.9);
 } catch (e) {
   bootError(e.message === 'nogl'
     ? 'This browser can\'t run WebGL 2, which the game needs. Try an up-to-date Chrome, Edge, Firefox or Safari.'
@@ -130,10 +136,13 @@ const isTyping = (e) => {
 class Session {
   constructor(cfg) {
     this.cfg = cfg;
+    // Easy / Hard / Extreme: every module of this session reads the scaled copy (never the raw `data`)
+    this.difficulty = normDifficulty(cfg.difficulty ?? params.get('difficulty'));
+    const D = this.data = withDifficulty(data, this.difficulty);
     this.mode = cfg.mode === 'online' ? 'online' : 'solo';
     this.role = cfg.role === 'cook' ? 'cook' : 'driver';
     this.net = this.mode === 'online' ? cfg.net : null;
-    this.seed = (cfg.seed ?? data.route.defaultSeed) >>> 0;
+    this.seed = (cfg.seed ?? D.route.defaultSeed) >>> 0;
     this.isHost = this.role === 'driver';
     this.demo = !!cfg.demo;
     this.lab2d = LAB2D || this.demo || params.has('autocook');
@@ -163,32 +172,47 @@ class Session {
     $('lab').innerHTML = '';
     $('touch').innerHTML = '';
 
-    this.view = new WorldView(canvas, data, { seed: this.seed, role: this.role, audio });
-    this.hud = new Hud($('hud'), data, { role: this.role });
+    this.view = new WorldView(canvas, D, { seed: this.seed, role: this.role, audio });
+    this.hud = new Hud($('hud'), D, { role: this.role });
+    this.hud.setDifficulty?.(this.difficulty);
 
     if (this.isHost) {
-      this.sim = new GameSim(data, { seed: this.seed, solo: this.mode === 'solo' });
+      this.sim = new GameSim(D, { seed: this.seed, solo: this.mode === 'solo' });
       this.input = new DriverInput();
       if (this.demo || params.has('auto')) {
-        // bot driver: skips the tutorial and "plays" each shop in 25 s through the driver-command sink
-        this.autopilot = new Autopilot(data, { seed: this.seed, sim: this.sim, onDriverCommand: (c) => this.sim.applyDriverCommand(c), autoShop: 25 });
+        // bot driver: skips the tutorial, sends the AI Rook up at stops and "plays" Doc's shop run in 25 s
+        // through the driver-command sink (solo / bots only — online, the real cook plays the shop)
+        this.autopilot = new Autopilot(D, { seed: this.seed, sim: this.sim, onDriverCommand: (c) => this.sim.applyDriverCommand(c), autoShop: this.mode === 'solo' ? 25 : null });
       }
     }
     // the opening garage tutorial (both roles); the sim starts in phase 'garage'
-    if (data.route.start?.garage) {
-      this.garage = new GarageView(this.view, data, {
+    if (D.route.start?.garage) {
+      this.garage = new GarageView(this.view, D, {
         role: this.role, hudRoot: $('hud'), solo: this.mode === 'solo',
         onSkip: this.isHost ? () => this.sim.applyDriverCommand({ type: DCMD.SKIP_TUTORIAL }) : null,
       });
     }
     // the driver drives in first person (it waits until the garage releases the camera)
     if (this.isHost) {
-      this.fp = new FirstPersonDriver(this.view, data, { hudRoot: $('hud'), audio });
+      this.fp = new FirstPersonDriver(this.view, D, { hudRoot: $('hud'), audio });
       this.fp.setActive(true);
       this.hud.setFirstPerson?.(true);
-      const mm = (e) => this.fp?.onPointer(e);
+      // Rook's roof defence (F / DEFEND): owns the camera + mouse while he is up there (not while the AI is)
+      this.defend = new DefendClient(this.view, D, { hudRoot: $('hud'), audio, canvas, sendDriverCommand: (c) => this.sim.applyDriverCommand(c) });
+      this.hud.onDefend = () => this.defendUp();
+      const mm = (e) => { if (this.defend?.active) this.defend.onPointer(e); else this.fp?.onPointer(e); };
+      const ptr = (e) => {
+        if (!this.defend?.active || this.paused || !$('overlay').hidden) return;
+        if (this.defend.onPointer(e) && e.type !== 'mousemove') e.preventDefault();
+      };
       window.addEventListener('mousemove', mm);
-      this._offs.push(() => window.removeEventListener('mousemove', mm));
+      for (const t of ['mousedown', 'mouseup', 'contextmenu']) canvas.addEventListener(t, ptr);
+      canvas.addEventListener('wheel', ptr, { passive: false });
+      this._offs.push(() => {
+        window.removeEventListener('mousemove', mm);
+        for (const t of ['mousedown', 'mouseup', 'contextmenu']) canvas.removeEventListener(t, ptr);
+        canvas.removeEventListener('wheel', ptr);
+      });
     }
     if (this.mode === 'solo') this.mountLab('solo');
     else if (this.role === 'cook') this.mountLab('cook');
@@ -214,7 +238,7 @@ class Session {
   // kind: 'cook' (online cook, lab is the whole game) · 'solo' · 'takeover' (driver whose cook left)
   mountLab(kind) {
     if (this.lab) return;
-    this.lab = new CookLab(data, { sendCommand: (c) => this.onCookCommand(c), seed: this.seed });
+    this.lab = new CookLab(this.data, { sendCommand: (c) => this.onCookCommand(c), seed: this.seed });
     if (this.lab2d) {
       const compact = kind !== 'cook';
       this.labUI = new CookUI(this.lab, $('lab'), { compact });
@@ -226,12 +250,13 @@ class Session {
       return;
     }
     document.body.classList.add('lab3d');
-    this.van = new VanLab3D(this.view, this.lab, data, { canvas: this.canvas, hudRoot: $('hud'), role: kind === 'cook' ? 'cook' : 'solo' });
+    this.van = new VanLab3D(this.view, this.lab, this.data, { canvas: this.canvas, hudRoot: $('hud'), role: kind === 'cook' ? 'cook' : 'solo' });
+    this.van.onShopRun = (def) => this.startShop(def, 'door');
     if (kind === 'cook') { if (!this.garage) this.van.setActive(true); }   // after the garage tutorial otherwise
     else {
       // Rook's AI keeps the RV rolling while you cook: steady cruise, no supply stops, no canyon jump.
-      this.labPilot = new Autopilot(data, { seed: this.seed, maxSpeed: 19, useNitro: false });
-      for (const st of data.route.stops) this.labPilot.skipped.add(st.id);
+      this.labPilot = new Autopilot(this.data, { seed: this.seed, maxSpeed: 19, useNitro: false });
+      for (const st of this.data.route.stops) this.labPilot.skipped.add(st.id);
       if (isTouch) this.buildSeatButton();
     }
   }
@@ -244,7 +269,7 @@ class Session {
   // Solo seat swap (3D lab): in the back you walk Doc around; the AI drives.
   setInLab(on, why = null) {
     if (!this.van || (on && this.ended)) return;
-    if (on && (this.garage || this.shop)) return;   // not during the tutorial or a shop challenge
+    if (on && (this.garage || this.shop || this.defend?.active)) return;   // not during the tutorial, a shop run or the roof
     if (on === this.inLab) return;
     this.inLab = on;
     this.input?.clear();
@@ -297,7 +322,7 @@ class Session {
       if (lab.state === 'idle' && lab.canStart && !lab.cookDown) {
         const list = lab.availableRecipes().filter((r) => r.canMake);
         const units = this.lastSnap?.inv?.units ?? 0;
-        const need = data.route.sellPoint.requiredUnits;
+        const need = this.data.route.sellPoint.requiredUnits;
         const g = this.lastSnap?.inv?.gadgets || {};
         const order = units < need + 2 ? ['premium', 'street', 'nitro', 'smoke', 'oil', 'patch'] : ['nitro', 'smoke', 'oil', 'patch', 'icepack'];
         const choice = order.map((id) => list.find((r) => r.id === id)).find((r) => r && !(r.kind === 'gadget' && (g[r.gadget] || 0) >= 2));
@@ -427,7 +452,8 @@ class Session {
       this.input.consume();   // drop driving edges
       return { ...NEUTRAL, ...this.garage.consumeInput() };
     }
-    if (this.shop) { this.input.consume(); return NEUTRAL; }   // Rook is in the shop; the sim ignores driving anyway
+    if (this.shop) { this.input.consume(); return NEUTRAL; }   // you're Doc in the shop (solo); the sim holds the RV
+    if (this.defend?.active) { this.input.consume(); return NEUTRAL; }   // Rook is on the roof; the sim holds the RV
     if (this.inLab && this.labPilot && this.lastSnap) return this.labPilot.update(this.lastSnap);
     if (this.autopilot && this.lastSnap && !this.input.manualRecently) {
       const a = this.autopilot.update(this.lastSnap);
@@ -480,8 +506,12 @@ class Session {
     }
 
     if (sim.rv.wrecked) this.onWrecked();
+    // Rook's roof defence: DefendClient takes the camera while he is up there (not while the AI Rook is)
+    this.defend?.update(this.paused ? 0 : dt, snap);
+    this.syncRoofCamera();
     this.fp?.update(this.paused ? 0 : dt, snap, this._lastInput);
-    this.hud.setLookCooldown?.(this.fp?.active ? this.fp.cooldown : null);
+    this.hud.setMode?.(this.defend?.active ? 'roof' : this.shop ? 'shop' : this.inLab ? 'lab' : 'drive');
+    this.hud.setLookCooldown?.(this.fp?.active ? this.fp.cooldown : null, { active: this.fp?.mode === 'look' });
     if (render) this.view.render(this.paused ? 0 : dt);
 
     if (!this.ended && (sim.phase === 'won' || sim.phase === 'lost')) {
@@ -503,7 +533,7 @@ class Session {
     this._wrecked = true;
     this.input?.clear();
     audio.horn?.(false);
-    if (this.shop) { try { this.shop.destroy(); } catch (e) { console.warn(e); } this.shop = null; document.body.classList.remove('in-shop'); }
+    this.endShop();
     this.fp?.setActive(false);
     this.hud.setFirstPerson?.(false);
     if (this.van?.active) {
@@ -523,6 +553,8 @@ class Session {
       if (this.lastSnap) this.garage.update(dt, this.lastSnap);
       if (this.garage.finished) { this.garage.destroy(); this.garage = null; this.van?.setActive(true); this.afterGarage(); }
     }
+    this.updateCookShop(this.lastSnap, dt);
+    this.hud.setMode?.(this.shop ? 'shop' : 'lab');
     if (this.lab) {
       this.lab.update(dt);
       this.labUI?.update(dt);
@@ -539,40 +571,98 @@ class Session {
   // ── garage → road ────────────────────────────────────────────────────────
   afterGarage() {
     if (this.destroyed || this.ended) return;
-    if (this.mode === 'solo' && !this.demo) this.hud.toast(this.van ? 'Drive out! WASD / arrows · C looks around · Tab: go cook in the back' : 'Drive out! WASD / arrows · C looks around', 'info');
-    else if (this.role === 'driver') this.hud.toast('Drive out! WASD / arrows · C looks around (every 30 s)', 'info');
-    else this.hud.toast('You\'re in the lab. Walk to the Recipe Board and start a batch.', 'info');
+    if (this.mode === 'solo' && !this.demo) this.hud.toast(this.van ? 'Drive out — Tab goes cooking in the back' : 'Drive out — C looks around', 'info');
+    else if (this.role === 'driver') this.hud.toast('Drive out — F defends when the cops close in', 'info');
+    else this.hud.toast('Click to look around · walk to the Recipe Board', 'info');
   }
 
-  // ── supply stops: Rook's shop challenge (driver side, local) ─────────────
+  // ── supply stops: Doc's shop run (first person, local) + Rook's DEFEND ────
+  // Online the cook plays the run on his own computer (van.onShopRun → startShop). The host only runs it
+  // when the player is Doc too: solo (right away when the stop parks — the AI Rook defends) or after the
+  // cook left (takeover). The sim stays authoritative: shopEnter / shopDone / shopAbort, 90 s limit, bust rules.
+  hostRunsShop() { return this.mode === 'solo' || this.localTakeover; }
+
   updateShop(snap, dt) {
     const st = snap.stop;
-    if (!st || st.state !== 'shopping') { this._shopActiveFor = null; if (this.shop) this.endShop(); return; }
+    if (this.shop && (!st || st.id !== this.shop.stopId || st.state !== 'shopping')) this.endShop();   // timed out / RV left
+    if (!st || st.state !== 'shopping') { this._shopActiveFor = null; return; }
+    if (!this.hostRunsShop()) return;
     if (this.autopilot && !this.input.manualRecently) return;   // the bot "shops" through its command sink
-    if (!this.shop && this._shopActiveFor !== st.id) {
-      const def = data.route.stops.find((s) => s.id === st.id);
-      if (!def) return;
-      this._shopActiveFor = st.id;
-      if (this.inLab) this.setInLab(false, `${def.name} — Rook goes in`);
-      this.input.clear();
-      audio.horn?.(false);
-      this.fp?.setActive(false);
-      document.body.classList.add('in-shop');
-      this.shop = new ShopChallenge(this.view, def, data, {
-        hudRoot: $('hud'),
-        onDone: (score) => { this.sim.applyDriverCommand({ type: DCMD.SHOP_DONE, stopId: def.id, score }); this.endShop(); },
-        onAbort: () => { this.sim.applyDriverCommand({ type: DCMD.SHOP_ABORT, stopId: def.id }); this.endShop(); },
-      });
+    if (!this.shop && st.doc === 'in' && this._shopActiveFor !== st.id && !this.inLab && !this.ended) {
+      const def = this.data.route.stops.find((s) => s.id === st.id);
+      if (def) this.startShop(def, 'auto');
     }
     this.shop?.update(this.paused ? 0 : dt);
   }
 
+  updateCookShop(snap, dt) {
+    const st = snap?.stop;
+    if (this.shop && (!st || st.id !== this.shop.stopId || st.state !== 'shopping')) this.endShop();   // the host ended it (90 s)
+    this.shop?.update(dt);
+  }
+
+  // how: 'auto' (solo host at a stop: Doc is out at once) · 'door' (VanLab3D: Doc walked to the side door + E)
+  startShop(def, how = 'door') {
+    if (!def || this.shop || this.ended || this._wrecked) return;
+    this._shopActiveFor = def.id;
+    const host = this.isHost;
+    const send = (type, extra = {}) => {
+      const c = { type, stopId: def.id, ...extra };
+      if (host) this.sim.applyDriverCommand(c);
+      else if (this.net && this.peerPresent) this.net.sendGame({ k: GM.CMD, c });
+    };
+    send(CMD.SHOP_ENTER);
+    if (host) {
+      if (this.inLab && how === 'auto') this.setInLab(false, `${def.name} — Doc jumps out`);
+      this.input.clear();
+      audio.horn?.(false);
+      this.fp?.setActive(false);
+      this.hud.setFirstPerson?.(false);
+    }
+    document.body.classList.add('in-shop');
+    const shop = new ShopChallenge(this.view, def, this.data, {
+      hudRoot: $('hud'), firstPerson: true,
+      onProgress: (p) => this.lab?.setShopProgress?.(p ? { stopId: def.id, ...p } : null),
+      onDone: (score) => { if (this.shop === shop) { send(CMD.SHOP_DONE, { score }); this.endShop(); } },
+      onAbort: () => { if (this.shop === shop) { send(CMD.SHOP_ABORT); this.endShop(); } },
+    });
+    shop.stopId = def.id;
+    this.shop = shop;
+    this.hud.toast(`${def.name} — ${def.shop?.title || 'shop run'}`, 'info');
+  }
+
   endShop() {
     if (!this.shop) return;
-    try { this.shop.destroy(); } catch (e) { console.warn(e); }
+    const shop = this.shop;
     this.shop = null;
+    try { shop.destroy(); } catch (e) { console.warn(e); }
+    this.lab?.setShopProgress?.(null);
     document.body.classList.remove('in-shop');
-    if (!this.inLab) { this.fp?.setActive(true); this.hud.setFirstPerson?.(true); }
+    try { this.van?.returnFromShop?.(); } catch (e) { console.warn(e); }
+    if (this.isHost && !this.inLab && !this._wrecked && !this.defend?.active) { this.fp?.setActive(true); this.hud.setFirstPerson?.(true); }
+  }
+
+  // F / the DEFEND button: Rook climbs onto the roof (the sim checks it's allowed: RV stopped, heat, a cop near)
+  defendUp() {
+    if (!this.isHost || this.ended || this.paused || this.garage || this.shop || this.inLab || this.defend?.active) return;
+    const r = this.lastSnap?.roof;
+    if (r?.active) return;
+    const ok = this.sim.applyDriverCommand({ type: DCMD.DEFEND, on: true });
+    if (!ok && r && !r.available) {
+      const why = { moving: 'Stop the RV first', noHeat: 'Nobody to fight off — no heat', noCop: 'No cop close enough to fight', airborne: 'Not in mid-air!', cookDown: 'Not now' }[r.why];
+      if (why) this.hud.toast(why, 'info');
+    }
+  }
+
+  // DefendClient owns the camera while Rook is on the roof: first person off, back on when he's in the seat
+  syncRoofCamera() {
+    const on = !!this.defend?.active;
+    if (on === !!this._roofCam) return;
+    this._roofCam = on;
+    this.input?.clear();
+    audio.horn?.(false);
+    if (on) { this.fp?.setActive(false); this.hud.setFirstPerson?.(false); }
+    else if (!this.inLab && !this.shop && !this._wrecked && !this.garage) { this.fp?.setActive(true); this.hud.setFirstPerson?.(true); }
   }
 
   // ── end of game ──────────────────────────────────────────────────────────
@@ -583,11 +673,12 @@ class Session {
     this.hideOverlay();
     this.input?.clear();
     audio.horn?.(false);
+    this.endShop();
     if (this.inLab) { this.inLab = false; this.van?.setActive(false); document.body.classList.remove('in-lab'); }
     if (this.mode === 'solo') {
       this.hud.showEnd(result, {
         canRestart: true, restartLabel: 'Drive again', menuLabel: 'Menu',
-        onRestart: () => startGame({ mode: 'solo', role: 'driver', seed: params.has('seed') ? this.seed : randomSeed(), demo: this.demo }),
+        onRestart: () => startGame({ mode: 'solo', role: 'driver', seed: params.has('seed') ? this.seed : randomSeed(), demo: this.demo, difficulty: this.difficulty }),
         onMenu: () => this.quitToMenu(),
       });
     } else {
@@ -629,23 +720,28 @@ class Session {
     const keys = this.isHost ? [
       ['W / ↑', 'Accelerate'], ['S / ↓', 'Brake / reverse'], ['A D / ← →', 'Steer'], ['Space', 'Handbrake'],
       ['H', 'Horn (scares pedestrians off the road)'], ['Q', 'Smoke bomb'], ['E', 'Oil slick'], ['Shift', 'Nitro'],
-      ['C', 'Look around outside the RV (3 s, every 30 s)'], ['Mouse', 'Turn your head in the cab (click for mouse-look)'],
-      ['R', 'Reset if stuck'], ['On foot', 'WASD walk · Shift run · E use · Space jump'], ['Tab', this.van ? 'Swap seats: go cook in the back (AI drives)' : 'Show / hide the lab'], ['M', 'Mute'], ['Esc / P', 'Pause'],
-      ...(this.van ? [['— in the van —', ''], ['WASD / ↑↓←→', 'Walk Doc around the lab'], ['Space', 'Jump'], ['E', 'Use a station / work the step'], ['Q / Esc', 'Step away'], ['Click', 'Walk there / use · drag to cook'], ['Wheel', 'Zoom']] : []),
+      ['C', 'Look around outside the RV (3 s, then a cool-down)'], ['Mouse', 'Turn your head in the cab'],
+      ['F', 'Defend: Rook climbs onto the roof (RV stopped, cops close)'],
+      ['On the roof', 'Mouse aims · click fires · right-click scope · R reload · 1–3 guns · 4–6 throwables · W / F climb down'],
+      ['R', 'Reset if stuck'], ['On foot', 'WASD walk · Shift run · E use (hold at the suit rack) · Space jump'],
+      ['Tab', this.van ? 'Swap seats: go cook in the back (AI drives)' : 'Show / hide the lab'], ['M', 'Mute'], ['P', 'Pause'],
+      ...(solo ? [['At a stop', 'You play Doc\'s shop run in first person while the AI Rook defends the RV']] : []),
+      ...(this.van ? [['— in the van —', ''], ['Mouse', 'Look around (click to capture the mouse)'], ['WASD', 'Walk'], ['E / click', 'Use what you look at · work the step'], ['Q', 'Step away'], ['V', 'Vent fan'], ['O', 'Cut-away overview']] : []),
     ] : this.van ? [
-      ['WASD / ↑↓←→', 'Walk Doc around the lab'], ['Space', 'Jump'], ['E', 'Use a station / work the step'], ['Q / Esc', 'Step away from a station'],
-      ['Click', 'Walk there · click a station to use it'], ['Drag', 'Cook on the props (stir, pour, turn the knob…)'], ['1–7', 'Pick a recipe on the board'], ['Wheel', 'Zoom'],
-      ['R', 'At a stop: climb onto the roof (mouse aims, hold click = hose, 1/2/3 + right-click = throw)'], ['M', 'Mute'],
+      ['Mouse', 'Look around (click to capture the mouse, Esc frees it)'], ['WASD / ↑↓←→', 'Walk Doc around the lab'], ['E / click', 'Use the station you look at · work the step'],
+      ['Q', 'Step away from a station'], ['Drag', 'Cook on the props (stir, pour, turn the knob…)'], ['Tab', 'Recipe Board'], ['V', 'Vent fan'], ['O', 'Cut-away overview'],
+      ['At a stop', 'Walk to the side door and press E for the shop run · hold Esc to give up'], ['M', 'Mute'], ['P', 'Menu'],
     ] : [
       ['Mouse / touch', 'Pick a recipe, then play each step'], ['V', 'Vent (clears fumes, but cops see smoke)'], ['C', 'Curtains (hide the lab from cops)'],
       ['X', 'Extinguisher'], ['= / −', 'Burner up / down'], ['M', 'Mute'],
     ];
+    const need = this.data.route.sellPoint.requiredUnits;
     this.showNotice(solo ? 'Paused' : 'Menu',
-      solo ? 'Get to the drive-in at the end of the desert with 6+ bags, the RV in one piece and nobody busted.'
+      solo ? `Get to the drive-in at the end of the desert with ${need}+ bags, the RV in one piece and nobody busted.`
            : 'The game keeps running while this is open.',
       [
         { label: solo ? 'Resume' : 'Back to game', primary: true, onClick: () => this.togglePause() },
-        ...(solo ? [{ label: 'Restart', onClick: () => startGame({ mode: 'solo', role: 'driver', seed: randomSeed() }) }] : []),
+        ...(solo ? [{ label: 'Restart', onClick: () => startGame({ mode: 'solo', role: 'driver', seed: randomSeed(), difficulty: this.difficulty }) }] : []),
         { label: solo ? 'Quit to menu' : 'Leave game', onClick: () => this.quitToMenu() },
       ], keys);
   }
@@ -700,8 +796,16 @@ class Session {
       // on foot first: the shop challenge (driver) or the garage tutorial (both roles)
       if (this.shop && $('overlay').hidden && this.shop.onKey(e, true)) { e.preventDefault(); return; }
       if (this.garage && !this.garage.finished && $('overlay').hidden && this.garage.onKey(e, true)) { e.preventDefault(); return; }
+      // Rook on the roof: the roof client gets the keys (guns, reload, throw, W / F climbs down); P pauses
+      if (this.defend?.active && !this.paused && $('overlay').hidden) {
+        if (this.defend.onKey(e, true)) { e.preventDefault(); return; }
+        if ((code === 'Escape' || code === 'KeyP') && !e.repeat) { e.preventDefault(); this.togglePause(); }
+        if (code === 'Space' || code === 'Tab' || code.startsWith('Arrow')) e.preventDefault();
+        return;
+      }
       if (code === 'Tab' && (this.mode === 'solo' || this.localTakeover)) { e.preventDefault(); if (!e.repeat && !this.paused && !this.garage && !this.shop) this.toggleLabPanel(); return; }
       if (code === 'KeyC' && !e.repeat && this.fp && !this.van?.active && !this.shop && !this.paused) { e.preventDefault(); this.fp.lookAround(); return; }
+      if (code === 'KeyF' && this.isHost && !this.van?.active && !this.shop && !this.garage && !this.paused && $('overlay').hidden) { e.preventDefault(); if (!e.repeat) this.defendUp(); return; }
       // 3D van active (online cook, or solo player in the back): the van gets the keys first
       if (this.van?.active && !this.paused && $('overlay').hidden) {
         if (this.van.onKey(e, true)) { e.preventDefault(); return; }
@@ -722,6 +826,7 @@ class Session {
     };
     const up = (e) => {
       if (this.shop && this.shop.onKey(e, false)) { e.preventDefault(); return; }
+      if (this.defend?.active && this.defend.onKey(e, false)) { e.preventDefault(); return; }
       if (this.garage && !this.garage.finished && this.garage.onKey(e, false)) { e.preventDefault(); return; }
       if (this.van?.active && this.van.onKey(e, false)) { e.preventDefault(); return; }
       if (!this.isHost) return;
@@ -778,6 +883,7 @@ class Session {
     try { this.shop?.destroy(); } catch (e) { console.warn(e); }
     try { this.garage?.destroy(); } catch (e) { console.warn(e); }
     try { this.fp?.destroy(); } catch (e) { console.warn(e); }
+    try { this.defend?.destroy(); } catch (e) { console.warn(e); }
     try { this.labUI?.destroy(); } catch (e) { console.warn(e); }
     try { this.van?.destroy(); } catch (e) { console.warn(e); }
     try { this.hud.destroy(); } catch (e) { console.warn(e); }
@@ -793,9 +899,11 @@ class Session {
 }
 
 // ── go ──────────────────────────────────────────────────────────────────────
+window.__bootProgress?.(1);
 $('boot').classList.add('gone');
-if (params.has('demo')) startGame({ mode: 'solo', role: 'driver', seed: params.has('seed') ? +params.get('seed') : data.route.defaultSeed, demo: true });
-else if (params.has('solo')) startGame({ mode: 'solo', role: 'driver', seed: params.has('seed') ? +params.get('seed') : randomSeed() });
+const urlDifficulty = params.get('difficulty');
+if (params.has('demo')) startGame({ mode: 'solo', role: 'driver', seed: params.has('seed') ? +params.get('seed') : data.route.defaultSeed, demo: true, difficulty: urlDifficulty });
+else if (params.has('solo')) startGame({ mode: 'solo', role: 'driver', seed: params.has('seed') ? +params.get('seed') : randomSeed(), difficulty: urlDifficulty });
 else openMenu();
 
 window.__cookrun = { data, audio, startGame, openMenu, get session() { return session; } };
