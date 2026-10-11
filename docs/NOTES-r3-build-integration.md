@@ -62,8 +62,8 @@ are documented in the module headers instead:
 ## Checked
 
 - **Tests:** `npm test` passes — sim 96/96 (incl. 98 roof checks and full bot runs on all three difficulties), cook,
-  assets (239 kinds / 433 variants), net 80/80, e2e (the cook bot does 8 shop runs, the AI Rook defends, won on
-  Hard).
+  assets (239 kinds / 433 variants), net 80/80, e2e (the cook bot does 8 shop runs and the AI Rook defends; the bots' result depends on the random
+  seed: one run won on Hard, another was busted in the Ghost Town; e2e checks the networking, not the result).
 - **All 8 shop runs** finish with the bot inside the new timers (`shop-test.html?bot=1`).
 - **Headless browser, solo:**
   - garage → cab;
