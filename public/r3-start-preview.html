@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Start District Preview</title>
+<meta name="description" content="Round 3 proposal (R3-START): the Ironworks start district around Rook's Garage, shown in the real game world. Not wired into the game.">
+<link rel="icon" href="data:,">
+<style>
+  :root { --ink: #f1ead8; --muted: #b9b09c; --mustard: #d9a83a; --bg: #22262a; }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; font: 600 12px/1.3 system-ui, "Segoe UI", Helvetica, Arial, sans-serif; color: var(--ink); }
+  #view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+  #bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; padding: 5px 8px; background: rgba(34,38,42,.78); }
+  #bar a { color: var(--mustard); text-decoration: none; padding: 3px 7px; border-radius: 4px; background: rgba(0,0,0,.25); }
+  #bar a.on { background: var(--mustard); color: var(--bg); }
+  #bar .sep { width: 12px; }
+  #st { position: fixed; left: 8px; top: 8px; z-index: 20; padding: 5px 8px; border-radius: 6px; background: rgba(34,38,42,.72); font-variant-numeric: tabular-nums; white-space: pre; }
+  #label { position: fixed; left: 50%; top: 10px; transform: translateX(-50%); z-index: 20; padding: 6px 12px; border-radius: 6px; background: rgba(34,38,42,.8);
+           font: 800 15px/1 system-ui, sans-serif; letter-spacing: .06em; text-transform: uppercase; border-bottom: 3px solid var(--mustard); white-space: nowrap; }
+  #label.before { border-bottom-color: #8a8f99; }
+  .tag { position: fixed; transform: translate(-50%, -100%); padding: 3px 7px 4px; border-radius: 3px; background: rgba(24,22,20,.86); color: var(--ink); font-size: 12px; font-weight: 700; white-space: nowrap; text-align: center; line-height: 1.25; }
+  .tag.below { transform: translate(-50%, 6px); }
+  .tag i { display: block; font-style: normal; font-weight: 500; font-size: 10.5px; color: var(--muted); }
+  #err { position: fixed; left: 8px; bottom: 40px; z-index: 30; color: #ffb4a0; font: 12px monospace; white-space: pre-wrap; }
+  body.shot #bar, body.shot #st { display: none; }
+  body.nolabel #label { display: none; }
+  body.props { background: radial-gradient(ellipse at 50% 30%, #c9b8a0 0%, #8f8576 100%); }
+</style>
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="hud"></div>
+<div id="label"></div>
+<div id="st"></div>
+<div id="bar"></div>
+<div id="err"></div>
+<script type="module">
+// ─────────────────────────────────────────────────────────────────────────────
+// r3-start-preview — PROPOSED start district (agent R3-START), shown IN the real game world:
+// the real WorldView + route.json + the seeded Ironworks layout, with the proposal loaded the
+// way the game would load it (see docs/NOTES-r3-start.md):
+//   1. RoadInfo.res += R3_START_RESERVATIONS            (the seeded generator leaves the district alone)
+//   2. Layout.itemsIn() += startLayoutItems(track)      (baked into the chunks: no new draw calls per item)
+//   3. Chunks stream back to R3_START_MIN_Z near the start (today ci ≥ −2 → z ≥ −100)
+//   4. the pumpjacks are live objects (head + crank animated), like StructuresView items
+//
+//   ?layout=1|0        proposal on (default) / the current game ("before")
+//   &cam=top|back|left|door|turn|custom   presets (top/back/left = the smoke captures; door = driver at the
+//                      open garage door; turn = driver's eye right after turning onto the road)
+//   &pos=x,y,z&look=x,y,z&fov=60          with cam=custom
+//   &mode=props        the new kinds lined up with labels + tri counts
+//   &hour=6.6 &seed=1337 &shot=1 (hide UI) &label=0 &t=<sec> (advance before the first frame)
+// window.__r3 = { view, settled(), stats(), ready }
+// ─────────────────────────────────────────────────────────────────────────────
+import * as THREE from 'three';
+import { loadData } from './js/data/loadData.js';
+import { WorldView } from './js/render/WorldView.js';
+import { FakeSnapshots } from './js/render/fakeSnapshots.js';
+import { CHUNK } from './js/render/roadBuilder.js';
+import { FirstPersonDriver } from './js/render/fp/FirstPersonDriver.js';
+import { structureLayout } from './js/sim/structures.js';
+import { createModel, labelOf, statsOf } from './js/assets/index.js';
+import { R3_START_KINDS } from './js/assets/expansion/r3-start.js';
+import { startLayoutItems, startLive, startReservations, startColliders, R3_START_MIN_Z, R3_START_PLACEMENTS } from './js/assets/expansion/r3-start-layout.js';
+
+const q = new URLSearchParams(location.search);
+const errEl = document.getElementById('err');
+addEventListener('error', (e) => { errEl.textContent += (e.message || e) + '\n'; });
+addEventListener('unhandledrejection', (e) => { errEl.textContent += 'promise: ' + (e.reason && e.reason.message || e.reason) + '\n'; });
+const num = (k, d) => (q.has(k) && q.get(k) !== '' && isFinite(+q.get(k)) ? +q.get(k) : d);
+const vec = (k) => (q.get(k) || '').split(',').map(Number);
+if (q.has('shot')) document.body.classList.add('shot');
+if (q.get('label') === '0') document.body.classList.add('nolabel');
+window.__r3 = { ready: false };
+
+if (q.get('mode') === 'props') await propsMode();
+else await worldMode();
+
+// ═════════════════════════════════════════════════════════════════════════════
+// World mode
+// ═════════════════════════════════════════════════════════════════════════════
+async function worldMode() {
+  const data = await loadData();
+  const route = data.route;
+  const LAYOUT_ON = q.get('layout') !== '0';
+  const CAM = q.get('cam') || 'back';
+  const seed = num('seed', route.defaultSeed);
+  const hour = num('hour', null);
+  const canvas = document.getElementById('view');
+  const view = new WorldView(canvas, data, { seed, role: 'driver' });
+  const track = view.track;
+  const SL = structureLayout(track, route);
+  const G = SL.garage;                                       // rooks_garage frame (toWorld / toLocal)
+  // RV poses
+  const parkAt = (lz) => { const p = G.toWorld(2.2, lz); return { x: p.x, z: p.z, yaw: G.rotY }; };
+  const laneU = track.laneU(60, 1);
+  const POSES = {
+    park: parkAt(-2.2),
+    door: parkAt(num('doorZ', -0.8)),
+    turn: { x: track.xAt(num('turnZ', 60), laneU), z: num('turnZ', 60), yaw: track.headingAt(num('turnZ', 60)) },
+  };
+  const pose = CAM === 'door' ? POSES.door : CAM === 'turn' ? POSES.turn : POSES.park;
+  const gen = new FakeSnapshots(data, { seed, preset: 'route', start: pose.z, speed: 0, hour });
+  if (hour != null) view.setHourOverride(hour);
+  const lbl = document.getElementById('label');
+  const CAM_NAMES = { top: 'from above', back: 'looking back past the garage', left: 'across the road', door: "driver's seat · garage door open", turn: "driver's eye · after the right turn", custom: 'custom' };
+  lbl.textContent = (q.get('title') || (LAYOUT_ON ? 'Proposal · start district' : 'Current game')) + ' — ' + (CAM_NAMES[CAM] || CAM);
+  if (!LAYOUT_ON) lbl.classList.add('before');
+  await view.ready;
+
+  // ── the proposal, loaded the way the game would (see header) ──
+  const live = [];
+  if (LAYOUT_ON) {
+    view.info.res.push(...startReservations());
+    const items = startLayoutItems(track);
+    const L = view.chunks.layout;
+    const orig = L.itemsIn.bind(L);
+    L.itemsIn = (z0, z1) => { const out = orig(z0, z1); for (const it of items) if (it.z >= z0 && it.z < z1) out.push(it); return out; };
+    patchChunkRange(view.chunks, R3_START_MIN_Z);
+    for (const p of startLive(track)) {
+      const o = view.lib.create(p.kind, p.variant);
+      o.position.set(p.x, 0, p.z); o.rotation.y = p.yaw;
+      o.traverse((m) => { if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
+      view.scene.add(o);
+      const a = o.userData.anim || { period: 6.5, headAmp: 0.22 };
+      live.push({ o, head: o.getObjectByName('head'), crank: o.getObjectByName('crank'), period: a.period, amp: a.headAmp, phase: (p.z * 0.37) % 6 });
+    }
+  }
+
+  // ── camera ──
+  let fp = null;
+  const fixed = (pos, look, fov = 60) => ({ update(dt, cam) { cam.position.set(...pos); cam.up.set(0, 1, 0); cam.lookAt(...look); cam.fov = fov; cam.near = 0.25; cam.updateProjectionMatrix(); } });
+  const PRESETS = {
+    top: fixed([-10, 70, -30], [0, 0, 45]),
+    back: fixed([1.5, 2.2, 75], [1.5, 2, 0]),
+    left: fixed([1.5, 2.2, 60], [60, 2, 40]),
+  };
+  if (CAM === 'custom') view.setCameraController(fixed(vec('pos'), vec('look'), num('fov', 60)));
+  else if (PRESETS[CAM]) view.setCameraController(PRESETS[CAM]);
+  else {
+    fp = new FirstPersonDriver(view, data, { pointerLock: false, mirrors: q.get('mirrors') !== '0' });
+    await fp.ready;
+    fp.setActive(true);
+    fp.setHead(num('headYaw', 0), num('headPitch', 0));
+  }
+
+  // ── loop ──
+  let T = 0, last = performance.now();
+  function step(dt, draw = true) {
+    T += dt;
+    const snap = gen.snapshot(T);
+    snap.rv = { ...snap.rv, x: pose.x, y: 0, z: pose.z, yaw: pose.yaw, pitch: 0, roll: 0, speed: 0, steer: 0, airborne: false };
+    snap.ents = []; snap.events = [];
+    snap.feel = { latAcc: 0, bump: 0, speed: 0 };
+    for (const L of live) {
+      const t = (T + L.phase) / L.period * Math.PI * 2;
+      if (L.head) L.head.rotation.x = L.amp * Math.sin(t);
+      if (L.crank) L.crank.rotation.x = -t;
+    }
+    if (fp) fp.update(dt, snap);
+    view.pushSnapshot(snap, { interpolate: false });
+    view.render(dt, { draw });
+  }
+  const advance = (sec, dt = 1 / 30) => { const n = Math.max(1, Math.round(sec / dt)); for (let i = 0; i < n; i++) step(dt, i === n - 1); };
+  advance(num('t', 0.1));
+  window.__view = view;
+  Object.assign(window.__r3, {
+    view, fp, live, track, poses: POSES, advance,
+    settled: () => view.isSettled(),
+    stats: () => ({ ...view.stats, chunks: view.chunks.map.size, built: view.chunks.stats.built, layout: LAYOUT_ON, cam: CAM }),
+    colliders: () => startColliders(track),
+    placements: () => R3_START_PLACEMENTS,
+    ready: true,
+  });
+  const stEl = document.getElementById('st');
+  function frame(now) {
+    const dt = Math.min(0.1, (now - last) / 1000); last = now;
+    step(dt);
+    if (Math.floor(now / 400) !== Math.floor((now - dt * 1000) / 400)) {
+      const s = view.stats;
+      stEl.textContent = `layout ${LAYOUT_ON ? 'ON' : 'off'} · cam ${CAM}\nhour ${s.hour}  calls ${s.calls}  tris ${(s.triangles / 1000).toFixed(0)}k\nchunks ${view.chunks.map.size}  geos ${s.geometries}  tex ${s.textures}`;
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+  addEventListener('resize', () => view.resize());
+  // preset bar
+  const bar = document.getElementById('bar');
+  const link = (k, v) => { const u = new URLSearchParams(q); u.set(k, v); return '?' + u.toString(); };
+  let html = '';
+  for (const c of ['top', 'back', 'left', 'door', 'turn']) html += `<a href="${link('cam', c)}" class="${c === CAM ? 'on' : ''}">${c}</a>`;
+  html += '<span class="sep"></span>';
+  html += `<a href="${link('layout', '1')}" class="${LAYOUT_ON ? 'on' : ''}">proposal</a><a href="${link('layout', '0')}" class="${!LAYOUT_ON ? 'on' : ''}">current</a>`;
+  html += `<span class="sep"></span><a href="?mode=props">props</a>`;
+  bar.innerHTML = html;
+}
+
+// Chunks stream ci ≥ −2 (z ≥ −100) today. The proposal needs ground + road back to minZ while the RV
+// is near the start: same code as Chunks.update/pending with the lower bound extended (game: a
+// one-line change in chunks.js, see the notes).
+function patchChunkRange(ch, minZ) {
+  const lowCi = (z) => { let a = Math.max(-2, Math.floor((z + ch.range[0]) / CHUNK)); if (z < 300) a = Math.min(a, Math.floor(minZ / CHUNK)); return a; };
+  ch.update = function (z, budgetMs = 8) {
+    const a = lowCi(z);
+    const b = Math.min(this.nChunks, Math.floor((z + this.range[1]) / CHUNK));
+    for (const [ci, c] of this.map) if (ci < a - 1 || ci > b + 1) { this._dispose(c); this.map.delete(ci); }
+    if (this.job && (this.job.ci < a - 1 || this.job.ci > b + 1)) this.job = null;
+    const want = [];
+    for (let ci = a; ci <= b; ci++) if (!this.map.has(ci)) want.push(ci);
+    if (!want.length) { this.atlas.flush(); return 0; }
+    const zc = Math.floor(z / CHUNK);
+    want.sort((p, r) => Math.abs(p - zc) - Math.abs(r - zc));
+    const t0 = performance.now();
+    let n = 0;
+    if (this.job && want[0] !== this.job.ci && Math.abs(want[0] - zc) + 1 < Math.abs(this.job.ci - zc)) this.job = null;
+    while (performance.now() - t0 <= budgetMs) {
+      if (!this.job) { const ci = want.find((c) => !this.map.has(c)); if (ci == null) break; this.job = { ci, it: this._buildSteps(ci), ms: 0 }; }
+      const j = this.job;
+      let r;
+      do { r = j.it.next(); } while (!r.done && (budgetMs === Infinity || performance.now() - t0 <= budgetMs));
+      if (r.done) { this.map.set(j.ci, r.value); this.job = null; n++; }
+    }
+    this.atlas.flush();
+    return want.length - n;
+  };
+  ch.pending = function (z) {
+    const a = lowCi(z), b = Math.min(this.nChunks, Math.floor((z + this.range[1]) / CHUNK));
+    let n = 0; for (let ci = a; ci <= b; ci++) if (!this.map.has(ci)) n++; return n;
+  };
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Props mode — the new kinds lined up, with labels + tri counts
+// ═════════════════════════════════════════════════════════════════════════════
+async function propsMode() {
+  document.body.classList.add('props');
+  document.getElementById('label').textContent = 'R3-START · new kinds (tris per variant)';
+  const canvas = document.getElementById('view');
+  const W = innerWidth, H = innerHeight;
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+  renderer.setPixelRatio(1); renderer.setSize(W, H);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
+  renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color('#c9bba5');
+  scene.fog = new THREE.Fog('#c9bba5', 160, 420);
+  const cam = new THREE.PerspectiveCamera(36, W / H, 0.5, 900);
+  scene.add(new THREE.HemisphereLight('#efe6d6', '#7a6f60', 1.25));
+  const sun = new THREE.DirectionalLight('#fff0d8', 2.0);
+  sun.position.set(-60, 110, 90); sun.castShadow = true; sun.shadow.mapSize.set(4096, 4096);
+  Object.assign(sun.shadow.camera, { left: -120, right: 120, top: 90, bottom: -90, near: 1, far: 400 });
+  sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.05;
+  scene.add(sun);
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(900, 600), new THREE.MeshLambertMaterial({ color: '#8f877a' }));
+  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+  // rows of kind groups (fronts face +Z = the camera); one label per kind with the tris of each variant
+  const R90 = Math.PI / 2;
+  const rows = [
+    { z: -60, gap: 7, groups: [['tank_farm', [0, 1]], ['tow_yard', [0, 1]]] },
+    { z: -20, gap: 6, groups: [['pipe_bridge', [0]], ['refinery_gate', [0]], ['diner_24h', [0]], ['tyre_shop', [0]], ['corner_shop', [0]]] },
+    { z: 14, gap: 6, groups: [['pumpjack', [0, 1], R90], ['tow_truck', [0], R90], ['dumpster_alley', [0, 1]], ['scrub_patch', [0, 1, 2]], ['pole_sign', [0, 1, 2]]] },
+    { z: 40, gap: 0, groups: [['utility_pole', [0, 1, 2]]], span: 32, below: true },
+  ];
+  if (q.has('only')) {                                   // close-up of one kind (all variants)
+    const k = q.get('only'), n = (await import('./js/assets/index.js')).variantCount(k);
+    rows.length = 0; rows.push({ z: 0, gap: 6, groups: [[k, Array.from({ length: n }, (_, i) => i), num('rot', 0)]] });
+  }
+  const tags = [];
+  let BB = new THREE.Box3();
+  for (const row of rows) {
+    const groups = row.groups.map(([k, vs, rot = 0]) => {
+      const objs = vs.map((v) => { const o = createModel(k, v); o.rotation.y = rot; o.updateMatrixWorld(true); const bb = new THREE.Box3().setFromObject(o); return { v, o, b: bb, w: row.span || (bb.max.x - bb.min.x) }; });
+      const inner = row.span ? 0 : 2.5;
+      return { k, objs, inner, w: objs.reduce((a, o) => a + o.w, 0) + inner * (objs.length - 1) };
+    });
+    const total = groups.reduce((a, g) => a + g.w, 0) + row.gap * (groups.length - 1);
+    let x = -total / 2;
+    for (const g of groups) {
+      let xx = x, top = 0, front = -1e9;
+      const tris = [];
+      for (const it of g.objs) {
+        const cx = row.span ? xx + row.span / 2 : xx - it.b.min.x;
+        it.o.position.set(cx, 0, row.z - (row.span ? 0 : (it.b.max.z + it.b.min.z) / 2));
+        it.o.traverse((m) => { if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
+        scene.add(it.o);
+        top = Math.max(top, it.b.max.y); front = Math.max(front, it.o.position.z + (row.span ? 0 : it.b.max.z));
+        tris.push(statsOf(it.o).tris.toLocaleString());
+        BB.union(new THREE.Box3().setFromObject(it.o));
+        xx += it.w + g.inner;
+      }
+      const lift = row.span ? 1.2 : 1.0;
+      tags.push({ below: !!row.below, p: new THREE.Vector3(x + g.w / 2, row.below ? 0 : top + lift, row.span ? row.z + 2 : front - 2), html: `${labelOf(g.k)}${g.objs.length > 1 ? ' ×' + g.objs.length : ''}<i>${g.k} · ${tris.join(' / ')} tris</i>` });
+      x += g.w + row.gap;
+    }
+  }
+  let camPos = q.has('pos') ? vec('pos') : [0, 64, 104], look = q.has('look') ? vec('look') : [0, -2, -6];
+  if (q.has('only') && !q.has('pos')) {
+    const c = BB.getCenter(new THREE.Vector3()), sz = BB.getSize(new THREE.Vector3());
+    const d = Math.max(sz.x * 0.95, sz.y * 1.6, 8) * num('dist', 1.0);
+    const a = num('ang', 0.45);
+    camPos = [c.x + Math.sin(a) * d, c.y + d * num('elev', 0.42), c.z + Math.cos(a) * d]; look = [c.x, c.y * 0.6, c.z];
+  }
+  cam.position.set(...camPos); cam.lookAt(...look); cam.fov = num('fov', 40); cam.updateProjectionMatrix();
+  renderer.render(scene, cam);
+  const hud = document.getElementById('hud');
+  for (const t of tags) {
+    const p = t.p.clone().project(cam);
+    const el = document.createElement('div'); el.className = 'tag' + (t.below ? ' below' : '');
+    el.style.left = ((p.x * 0.5 + 0.5) * W).toFixed(0) + 'px'; el.style.top = ((-p.y * 0.5 + 0.5) * H).toFixed(0) + 'px';
+    el.innerHTML = t.html; hud.appendChild(el);
+  }
+  const total = R3_START_KINDS.length;
+  document.getElementById('st').textContent = `${total} new kinds`;
+  Object.assign(window.__r3, { ready: true, settled: () => true });
+}
+function variantName(k, v) {
+  const n = { tank_farm: [' · depot', ' · refinery'], tow_yard: [' · impound', ' · scrap'], pumpjack: [' · yellow', ' · oxblood'], dumpster_alley: ['', ' · recycling'], pole_sign: [' · diner', ' · tyres', ' · mart'], utility_pole: ['', ' · transformer', ' · lamp'], scrub_patch: [' · slab', ' · slab XL', ' · dirt'] }[k];
+  return n ? n[v] || '' : '';
+}
+</script>
+</body>
+</html>

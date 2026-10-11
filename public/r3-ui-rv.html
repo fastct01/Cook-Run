@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>R3 UI — top-down RV cut-away (capture helper)</title>
+<link rel="icon" href="data:,">
+<style>html,body{margin:0;background:transparent;overflow:hidden}canvas{display:block}</style>
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+</head>
+<body>
+<script type="module">
+// Capture helper for the Round 3 UI mockups (agent R3-UI): our own RV, roof off, lab visible, straight top-down.
+//   r3-ui-rv.html?ppm=200   pixels per metre (default 200)   ?tilt=0.08 slight perspective-like lean (radians)
+// Transparent background; window.__ready = true when drawn.
+import * as THREE from 'three';
+import { loadData } from './js/data/loadData.js';
+import { createModel, preloadAssets } from './js/assets/index.js';
+import { buildInterior } from './js/van/interior.js';
+
+const q = new URLSearchParams(location.search);
+const PPM = +(q.get('ppm') || 200);
+const X0 = -1.62, X1 = 1.62, Z0 = -4.62, Z1 = 4.62;
+const W = Math.round((X1 - X0) * PPM), H = Math.round((Z1 - Z0) * PPM);
+const data = await loadData();
+try { await preloadAssets?.({ kinds: ['rv', 'driver', 'cook'] }); } catch (e) { /* optional */ }
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W, H);
+renderer.setClearColor(0x000000, 0);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const it = buildInterior(data, { createModel });
+scene.add(it.root);
+
+// idle station props (pot, beaker, scales …) like the live lab
+try {
+  const P = await import('./js/van/presenters/index.js');
+  for (const id of new Set(Object.values(P.STEP_STATION))) {
+    const o = P.buildIdleProps(id);
+    if (o && it.anchors[id]) it.anchors[id].add(o);
+  }
+} catch (e) { console.warn('idle props', e); }
+
+// Doc at the stove (our own character)
+try {
+  const doc = createModel('cook');
+  doc.scale.setScalar(data.van.doc?.scale ?? 0.92);
+  const FY = data.van.rv.floorY ?? 0.72;
+  doc.position.set(0.22, FY, -0.62);
+  doc.rotation.y = Math.PI / 2;
+  const al = doc.getObjectByName('arm_l'), ar = doc.getObjectByName('arm_r');
+  if (al) al.rotation.x = -0.9; if (ar) ar.rotation.x = -0.7;
+  scene.add(doc);
+} catch (e) { console.warn('doc', e); }
+
+// full health, nothing selected: hide hull damage + station markers
+const Pp = it.parts;
+try { Pp.hull.visible = false; } catch (e) {}
+for (const h of Pp.hullHoles || []) { h.hole.visible = false; h.beam.visible = false; }
+for (const k of ['ring', 'arrow', 'glass']) if (Pp[k]) Pp[k].visible = false;
+// cut-away: slice everything at clipY (van-local) so the far wall, cab roof and lamps don't cover the lab
+const clipY = +(q.get('clip') || 2.05);
+renderer.clippingPlanes = [new THREE.Plane(new THREE.Vector3(0, -1, 0), clipY)];
+const casts = q.get('shadows') !== '0';
+scene.traverse((o) => { if (o.isMesh) { o.castShadow = casts && o.position.y < 3; o.receiveShadow = true; } });
+
+scene.add(new THREE.HemisphereLight('#fff4e0', '#8a5a3a', 1.35));
+const sun = new THREE.DirectionalLight('#fff1dc', 2.1);
+sun.position.set(4, 12, 3);
+sun.target.position.set(0, 0, 0);
+sun.castShadow = true;
+sun.shadow.mapSize.set(4096, 4096);
+Object.assign(sun.shadow.camera, { left: -6, right: 6, top: 6, bottom: -6, near: 0.5, far: 40 });
+sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.02;
+scene.add(sun, sun.target);
+
+const cam = new THREE.OrthographicCamera(X0, X1, (Z1 - Z0) / 2, -(Z1 - Z0) / 2, 0.1, 100);
+// looking straight down, RV front (+Z) at the top of the image; +X (driver's left) on screen-left
+const tilt = +(q.get('tilt') || 0);
+cam.position.set(0, 30, 0);
+cam.up.set(0, 0, 1);
+cam.lookAt(0, 0, 0);
+cam.left = -X1; cam.right = -X0;   // screen-right is −X
+cam.updateProjectionMatrix();
+if (tilt) { cam.position.set(0, 30, -30 * Math.tan(tilt)); cam.lookAt(0, 0, 0); }
+
+renderer.render(scene, cam);
+requestAnimationFrame(() => { renderer.render(scene, cam); window.__ready = true; });
+</script>
+</body>
+</html>

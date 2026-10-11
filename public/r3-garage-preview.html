@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Garage Lab Preview</title>
+<meta name="description" content="Round 3 proposal (R3-GARAGE): Rook's Garage dressed as a home lab, suit rack, suited crew and the way-out arrows. Not wired into the game.">
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+<style>
+  :root { --ink: #f1ebdc; --muted: #b9b09c; --mustard: #F2B90F; --bg0: #2b2a28; --bg1: #3a3834; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: linear-gradient(#e7b98b 0%, #f1d9b4 38%, #cfd9dc 100%); font-family: "Inter", "Segoe UI", system-ui, Helvetica, Arial, sans-serif; }
+  body.studio { background: radial-gradient(ellipse at 50% 35%, #4a4741 0%, #2b2a28 75%); }
+  canvas { display: block; }
+  #cap { position: fixed; left: 14px; top: 12px; max-width: calc(100vw - 28px); padding: 7px 12px; border-radius: 4px; background: rgba(24, 22, 20, 0.82); color: var(--ink); font-size: 14px; line-height: 1.35; font-weight: 600; letter-spacing: 0.01em; pointer-events: none; }
+  #cap b { color: var(--mustard); font-weight: 800; }
+  #cap span { color: var(--muted); font-weight: 500; }
+  .tag { position: fixed; transform: translate(-50%, -100%); padding: 3px 7px 4px; border-radius: 3px; background: rgba(24, 22, 20, 0.86); color: var(--ink); font-size: 12.5px; font-weight: 700; white-space: nowrap; pointer-events: none; text-align: center; line-height: 1.25; }
+  .tag i { display: block; font-style: normal; font-weight: 500; font-size: 11px; color: var(--muted); }
+  .tag.small { font-size: 11.5px; }
+  .tag.below { transform: translate(-50%, 0); }
+  .lead { position: fixed; width: 0; border-left: 1px solid rgba(241, 235, 220, 0.55); pointer-events: none; }
+  #err { position: fixed; left: 14px; bottom: 12px; color: #ffb4a0; font: 12px monospace; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="cap"></div>
+<div id="err"></div>
+<script type="module">
+// ─────────────────────────────────────────────────────────────────────────────
+// r3-garage-preview — PROPOSED dressing of Rook's Garage (agent R3-GARAGE). Not wired into the game.
+//   ?view=overview | lab | rack | cab | lineup | crew      (camera presets)
+//   &orbit=1   adds OrbitControls (inspect)   &door=0..1   roll-up door (default open)
+// Positions below are the proposed garage-interior-local placements (see docs/NOTES-r3-garage.md).
+// window.__ready = true once a few frames have been drawn (used by the screenshot script).
+// ─────────────────────────────────────────────────────────────────────────────
+import * as THREE from 'three';
+import { createModel, labelOf, cloneInstanceMaterials, statsOf } from './js/assets/index.js';
+import { LAYOUT } from './js/sim/garage.js';
+import { Avatar } from './js/onfoot/avatar.js';
+import { R3_GARAGE_PLACEMENTS, R3_SUIT_UP, R3_EXIT_ARROWS } from './js/assets/expansion/r3-garage-layout.js';
+
+const Q = new URLSearchParams(location.search);
+const VIEW = Q.get('view') || 'overview';
+const W = innerWidth, H = innerHeight;
+const errEl = document.getElementById('err');
+addEventListener('error', (e) => { errEl.textContent += (e.message || e) + '\n'; });
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W, H);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.08;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(55, W / H, 0.05, 400);
+
+const PI = Math.PI;
+// ── PROPOSED placements (garage_interior-local): expansion/r3-garage-layout.js
+const PLACE = R3_GARAGE_PLACEMENTS.map((p) => ({ kind: p.kind, v: p.variant, pos: p.pos, rotY: p.rotY }));
+const RV = LAYOUT.rvPark;                                  // { x: 4.0, z: -0.2, yaw: 0 }
+const NOSE = R3_EXIT_ARROWS.path.startsAt;                 // chevron path start: just past the RV's front bumper
+const FLOAT = { pos: R3_EXIT_ARROWS.float.pos, rotY: R3_EXIT_ARROWS.float.rotY };   // floating OUT arrow
+const SUIT_SPOT = [R3_SUIT_UP.marker.x, R3_SUIT_UP.marker.z];                       // proposed "Suit up" glow
+const CREW = { rook: { pos: [4.25, 0, -5.0], yaw: PI - 0.72, speed: 1.6 }, doc: { pos: [1.7, 0, -5.55], yaw: -0.3, carry: 'notebook' } };
+
+// ── environment ──────────────────────────────────────────────────────────────
+function lights(studio) {
+  const hemi = new THREE.HemisphereLight('#dfe9f0', studio ? '#6f604c' : '#8a7a62', studio ? 1.15 : 1.1);
+  scene.add(hemi);
+  const sun = new THREE.DirectionalLight('#fff1dc', studio ? 2.1 : 1.9);
+  sun.position.set(studio ? 6 : -9, 14, studio ? 10 : 14);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  const sc = sun.shadow.camera; sc.left = -16; sc.right = 16; sc.top = 16; sc.bottom = -16; sc.near = 1; sc.far = 60;
+  sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.02;
+  scene.add(sun); scene.add(sun.target);
+  if (!studio) {
+    // GarageView's warm interior lights + one proposed extra over the lab corner
+    for (const [x, z, i] of [[-4.5, -1.8, 11], [-0.5, 3.6, 11], [5.2, -1.0, 11], [4.6, -5.2, 9]]) {
+      const L = new THREE.PointLight('#ffd9a0', i, 12, 1.4); L.position.set(x, 4.7, z); scene.add(L);
+    }
+  }
+}
+function outside() {
+  // apron + road + desert beyond the roll-up door (preview only; the game has the real world here)
+  const g = new THREE.Group();
+  const flat = (color, x0, x1, z0, z1, y) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), new THREE.MeshLambertMaterial({ color }));
+    m.rotation.x = -PI / 2; m.position.set((x0 + x1) / 2, y, (z0 + z1) / 2); m.receiveShadow = true; g.add(m); return m;
+  };
+  flat('#c9b48e', -80, 80, -60, 120, -0.03);                  // desert
+  flat('#a9a497', -12, 14, 7.0, 17.5, -0.004);                // concrete apron
+  flat('#4a4b4e', -80, 80, 17.5, 25.5, -0.003);               // road
+  for (let x = -78; x < 80; x += 6) flat('#e2c25a', x, x + 3, 21.42, 21.58, 0.0);
+  for (const z of [17.75, 25.25]) flat('#e9e4d4', -80, 80, z - 0.07, z + 0.07, 0.0);
+  scene.add(g);
+}
+
+// ── the dressed garage ───────────────────────────────────────────────────────
+const placed = {};
+function garage() {
+  const it = createModel('garage_interior');
+  cloneInstanceMaterials(it);
+  scene.add(it);
+  const door = it.getObjectByName('door');
+  if (door) door.position.y = THREE.MathUtils.clamp(+(Q.get('door') ?? 1), 0, 1) * 4.6;
+  const crate = it.getObjectByName('crate');
+  if (crate) { crate.position.set(LAYOUT.crateStart.x, 0, LAYOUT.crateStart.z); crate.rotation.set(0, LAYOUT.crateStart.yaw, 0); }
+  for (let i = 0; i < 4; i++) { const m = it.getObjectByName('marker_' + i); if (m) m.visible = false; }
+  // proposed "Suit up" tutorial target (marker_2 re-used at the rack's use spot)
+  const mk = it.getObjectByName('marker_2');
+  if (mk) {
+    mk.visible = true; mk.position.set(SUIT_SPOT[0], 0.014, SUIT_SPOT[1]); mk.scale.setScalar(1.15);
+    const mm = mk.getObjectByName('marker_2_mesh'); if (mm) { mm.material = mm.material.clone(); mm.material.color.set('#b48a3a'); }
+  }
+  // the RV, parked
+  const rvg = new THREE.Group(); rvg.position.set(RV.x, 0, RV.z); rvg.rotation.y = RV.yaw; scene.add(rvg);
+  const rv = createModel('rv'); rvg.add(rv);
+  placed.rvg = rvg; placed.rv = rv; placed.interior = it;
+  // props
+  for (const p of PLACE) {
+    const o = createModel(p.kind, p.v);
+    o.position.set(...p.pos); o.rotation.y = p.rotY;
+    scene.add(o);
+    (placed[p.kind] ||= []).push(o);
+  }
+  // tutorial snapshot: Doc has suited up (suit_1 gone from the rack), Rook walks up to the rack in his
+  // normal clothes (suit_0 still hanging) — the proposed "Suit up" step in progress
+  const rack = placed.suit_rack[0];
+  rack.getObjectByName('suit_1').visible = false;
+  const crewKinds = { rook: ['driver', 0], doc: ['crew_suited', 1] };
+  for (const who of ['rook', 'doc']) {
+    const a = new Avatar(createModel(...crewKinds[who]), { name: who });
+    a.set({ x: CREW[who].pos[0], z: CREW[who].pos[2], yaw: CREW[who].yaw, speed: CREW[who].speed || 0, carry: CREW[who].carry || null });
+    scene.add(a.root); a.update(0.016); for (let i = 0; i < 7; i++) a.update(0.05);
+    placed[who] = a;
+  }
+  // way-out arrows
+  const path = createModel('exit_arrow', 0);
+  const st = path.userData.path.start;
+  path.position.set(NOSE[0] - st[0], 0, NOSE[2] - st[2]);
+  cloneInstanceMaterials(path);
+  scene.add(path); placed.path = path;
+  const fl = createModel('exit_arrow', 1);
+  fl.position.set(...FLOAT.pos); fl.rotation.y = FLOAT.rotY;
+  cloneInstanceMaterials(fl);
+  scene.add(fl); placed.float = fl;
+  chase(0.42);
+}
+/** Chase light frozen at phase t (0..1): a bright band running toward the end arrow. */
+function chase(t) {
+  for (const o of [placed.path, placed.float]) {
+    if (!o) continue;
+    const M = o.userData.flashMaterials || {};
+    for (let i = 0; i <= 8; i++) {
+      const mat = M[i < 8 ? `chev_${i}_mesh` : 'arrow_mesh'];
+      if (!mat) continue;
+      const k = Math.max(0, 1 - Math.abs(t * 9 - i) / 1.6);
+      mat.color.setScalar(0.62 + 0.38 * k);
+    }
+  }
+}
+
+// ── camera presets ───────────────────────────────────────────────────────────
+const CAPTIONS = {
+  overview: '<b>Rook\u2019s Garage \u00b7 proposed lab dressing</b> <span>\u2014 back wall: bench + poster, fume hood, reagent shelf, suit rack, safety station \u00b7 right wall: drums, gas rack, jerrycans \u00b7 left wall: whiteboard by Doc\u2019s desk \u00b7 outside: chevron path + floating OUT arrow (cutaway: ceiling clipped)</span>',
+  lab: '<b>Lab corner</b> <span>\u2014 chem_bench + element_poster, fume_hood, reagent_shelf on the back wall \u00b7 Doc (crew_suited v1) with his notebook \u00b7 suit rack + safety station beyond</span>',
+  rack: '<b>Suit rack</b> <span>\u2014 \u201cSuit up\u201d step in progress: Rook walks to the glowing spot; suit_1 is hidden (Doc took it), suit_0 still hangs \u00b7 respirators, goggles, nitrile gloves, boots, aprons \u00b7 (RV behind the camera hidden for this close-up)</span>',
+  cab: '<b>Rook\u2019s eye in the parked RV</b> <span>\u2014 RV-local [0.55, 1.98, 2.5], pitch \u22120.15 \u00b7 chevrons run out of the door and curve right, the OUT arrow points right</span>',
+  lineup: '<b>Round 3 \u00b7 garage props</b> <span>\u2014 every new prop on a 1 m grid (exit_arrow v0 shown at 1:4.5)</span>',
+  crew: '<b>crew_suited</b> <span>\u2014 same rig as driver / cook, driven by the unchanged onfoot/avatar.js \u00b7 originals on the outside for comparison</span>',
+};
+function setCam(pos, look, fov = 55) { camera.position.set(...pos); camera.fov = fov; camera.updateProjectionMatrix(); camera.lookAt(...look); }
+
+const tags = [];
+/** Screen tag at `world`; optional `anchor` (world) draws a thin leader line from the tag to it. */
+function tag(text, sub, world, cls = '', anchor = null) {
+  const d = document.createElement('div'); d.className = 'tag ' + cls; d.innerHTML = text + (sub ? `<i>${sub}</i>` : ''); document.body.appendChild(d);
+  let l = null; if (anchor) { l = document.createElement('div'); l.className = 'lead'; document.body.appendChild(l); }
+  tags.push({ d, l, p: new THREE.Vector3(...world), a: anchor ? new THREE.Vector3(...anchor) : null, below: cls.includes('below') });
+}
+const scr = (v) => { const q = v.clone().project(camera); return { x: (q.x * 0.5 + 0.5) * W, y: (-q.y * 0.5 + 0.5) * H, ok: q.z < 1 }; };
+function placeTags() {
+  for (const t of tags) {
+    const s = scr(t.p);
+    t.d.style.left = s.x.toFixed(1) + 'px'; t.d.style.top = s.y.toFixed(1) + 'px'; t.d.style.display = s.ok ? '' : 'none';
+    if (t.l) {
+      const a = scr(t.a), y0 = Math.min(s.y, a.y), y1 = Math.max(s.y, a.y);
+      t.l.style.left = s.x.toFixed(1) + 'px'; t.l.style.top = y0.toFixed(1) + 'px'; t.l.style.height = Math.max(0, y1 - y0).toFixed(1) + 'px';
+    }
+  }
+}
+
+function lineup() {
+  document.body.classList.add('studio');
+  renderer.toneMapping = THREE.NoToneMapping;
+  lights(true);
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshLambertMaterial({ color: '#8d8a84' }));
+  floor.rotation.x = -PI / 2; floor.receiveShadow = true; scene.add(floor);
+  const grid = new THREE.GridHelper(30, 30, '#7a7771', '#83807a'); grid.position.y = 0.002; scene.add(grid);
+  const name = (k, v) => `${k}${k === 'chem_drums' || k === 'exit_arrow' ? ' v' + v : ''}`;
+  const back = [['fume_hood', 0, -6.7], ['suit_rack', 0, -4.35], ['reagent_shelf', 0, -2.2], ['safety_station', 0, -0.75], ['gas_cylinders', 0, 0.7], ['recipe_whiteboard', 0, 2.65], ['exit_arrow', 1, 5.35]];
+  const front = [['chem_bench', 0, -5.0], ['element_poster', 0, -2.55], ['chem_drums', 0, -0.4], ['chem_drums', 1, 1.55], ['exit_arrow', 0, 4.1]];
+  const ZB = -2.0, ZF = 1.25;
+  back.forEach(([k, v, x], i) => {
+    const o = createModel(k, v); o.position.set(x, 0, ZB); scene.add(o); cloneInstanceMaterials(o);
+    if (k === 'exit_arrow') placed.float = o;
+    const st = statsOf(o), s = o.userData.size;
+    const top = k === 'exit_arrow' ? 3.1 : s.h;
+    tag(name(k, v), `${labelOf(k)}<br>${st.tris} tris \u00b7 ${st.meshes} meshes`, [x, 3.45 + (i % 2) * 0.85, ZB], '', [x, top + 0.05, ZB]);
+  });
+  front.forEach(([k, v, x], i) => {
+    const o = createModel(k, v);
+    let y = 0, sc = 1;
+    if (k === 'element_poster') y = 0.62;
+    if (k === 'exit_arrow') sc = 1 / 4.5;
+    o.position.set(x, y, ZF); o.scale.setScalar(sc); scene.add(o); cloneInstanceMaterials(o);
+    if (k === 'exit_arrow') placed.path = o;
+    if (k === 'element_poster') { const p = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.64, 0.05), new THREE.MeshLambertMaterial({ color: '#5d6367' })); p.position.set(x, 0.32, ZF - 0.04); p.castShadow = true; scene.add(p); }
+    const st = statsOf(o), s = o.userData.size;
+    tag(name(k, v), `${labelOf(k)}${k === 'exit_arrow' ? ' (1:4.5)' : ''}<br>${st.tris} tris \u00b7 ${st.meshes} meshes`, [x, 0, ZF + 1.75 + (i % 2) * 0.9], 'below', [x, 0, ZF + s.l * sc / 2]);
+  });
+  chase(0.42);
+  setCam([-0.4, 7.4, 13.6], [-0.4, 0.9, 0.2], 47);
+}
+
+function crew() {
+  document.body.classList.add('studio');
+  renderer.toneMapping = THREE.NoToneMapping;
+  lights(true);
+  const floor = new THREE.Mesh(new THREE.CircleGeometry(12, 48), new THREE.MeshLambertMaterial({ color: '#8d8a84' }));
+  floor.rotation.x = -PI / 2; floor.receiveShadow = true; scene.add(floor);
+  // [kind, variant, x, yaw, pose, title, sub]
+  const rows = [
+    ['driver', 0, -3.0, 0.15, {}, 'driver', 'Rook (original)'],
+    ['crew_suited', 0, -1.8, 0.1, {}, 'crew_suited v0', 'Rook suited'],
+    ['crew_suited', 0, -0.6, 2.35, { speed: 2.6, steps: 9 }, 'walk cycle', 'from behind'],
+    ['crew_suited', 1, 0.6, -0.55, { speed: 1.9, carry: 'crate', steps: 13 }, 'carry pose', 'Avatar carry'],
+    ['crew_suited', 1, 1.8, -0.1, {}, 'crew_suited v1', 'Doc suited'],
+    ['cook', 0, 3.0, -0.15, {}, 'cook', 'Doc (original)'],
+  ];
+  for (const [k, v, x, yaw, pose, title, sub] of rows) {
+    const a = new Avatar(createModel(k, v), { name: k + x });
+    a.set({ x, z: 0, yaw, speed: pose.speed || 0, carry: pose.carry || null }); scene.add(a.root);
+    a.update(0.016); for (let i = 0; i < (pose.steps || 20); i++) a.update(0.05);
+    const st = statsOf(a.model);
+    tag(title, `${sub}${pose.speed ? '' : ' \u00b7 ' + st.tris + ' tris'}`, [x, 2.1, 0], 'small');
+  }
+  setCam([0, 1.55, 7.2], [0, 1.02, 0], 32);
+}
+
+function camOverride() {
+  const c = Q.get('cam'); if (!c) return;
+  const v = c.split(',').map(Number); setCam([v[0], v[1], v[2]], [v[3], v[4], v[5]], v[6] || 55);
+}
+function setup() {
+  if (VIEW === 'lineup') return lineup();
+  if (VIEW === 'crew') return crew();
+  lights(false); outside(); garage();
+  if (VIEW === 'overview') { setCam([-8, 21, 25], [1.5, 0, 3.9], 47); placed.interior.getObjectByName('door').visible = false; }
+  else if (VIEW === 'lab') setCam([0.8, 2.3, -3.3], [2.2, 1.2, -7], 60);
+  else if (VIEW === 'rack') { placed.rv.visible = false; setCam([5.75, 1.9, -3.05], [4.95, 1.0, -6.9], 54); }
+  else if (VIEW === 'cab') {
+    // Rook's eye in the parked RV (hazards-cab.js CAB): the first-person cab replaces the RV body
+    const cab = createModel('rv_cab_fp');
+    cab.position.set(...cab.userData.rvOffset);
+    placed.rvg.add(cab);
+    placed.rv.visible = false;
+    const eye = cab.userData.eye;
+    placed.rvg.updateMatrixWorld(true);
+    const p = new THREE.Vector3(...eye).applyMatrix4(placed.rvg.matrixWorld);
+    camera.position.copy(p);
+    camera.rotation.set(cab.userData.eyePitch ?? -0.15, PI + RV.yaw, 0, 'YXZ');
+    camera.fov = cab.userData.fov || 72; camera.updateProjectionMatrix();
+  }
+}
+
+document.getElementById('cap').innerHTML = CAPTIONS[VIEW] || VIEW;
+setup();
+camOverride();
+const clipY = Q.get('clip') ?? (VIEW === 'overview' ? '6.2' : null);
+if (clipY != null && clipY !== 'none') renderer.clippingPlanes = [new THREE.Plane(new THREE.Vector3(0, -1, 0), +clipY)];
+let frames = 0;
+if (Q.get('orbit') === '1') {
+  const { OrbitControls } = await import('three/addons/controls/OrbitControls.js');
+  const oc = new OrbitControls(camera, renderer.domElement);
+  const d = new THREE.Vector3(); camera.getWorldDirection(d); oc.target.copy(camera.position).addScaledVector(d, 6); oc.update();
+}
+const clock = new THREE.Clock();
+function loop() {
+  const t = clock.getElapsedTime();
+  if (Q.get('animate') === '1') { chase((t / 1.2) % 1); if (placed.float) placed.float.getObjectByName('arrow').position.y = 2.4 + 0.12 * Math.sin(2.4 * t); }
+  renderer.render(scene, camera);
+  placeTags();
+  if (++frames === 4) window.__ready = true;
+  requestAnimationFrame(loop);
+}
+loop();
+window.__scene = scene; window.__placed = placed; window.__camera = camera;
+</script>
+</body>
+</html>

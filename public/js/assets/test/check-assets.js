@@ -30,7 +30,8 @@ if (new Set(catKinds).size !== catKinds.length) fail('duplicate kinds in CATEGOR
 
 // 2. budgets (tris)
 const BUDGET = { vehicles: 2000, characters: 1200, props: 300, scenery: 1500, stores: 9000, bridge: 6000 };
-const BUDGET_OVERRIDE = { train: 6000, mesa: 2500, canyon_wall: 2500, smoke_cloud: 700, roadblock: 900, crossing_gate: 600, truck: 2400, bus: 2000, house: 1800, building: 2600 };
+const BUDGET_OVERRIDE = { train: 6000, mesa: 2500, canyon_wall: 2500, smoke_cloud: 700, roadblock: 900, crossing_gate: 600, truck: 2400, bus: 2000, house: 1800, building: 2600,
+  rv_cab_fp_r3: 7000 };   // R3-CAB2: proposed FP cab + hula dancer / freshener / dice (one per screen, ~6.8k)
 const catOf = (k) => Object.entries(CATEGORIES).find(([, l]) => l.includes(k))[0];
 
 const rows = [];
