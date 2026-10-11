@@ -70,7 +70,7 @@ export class HammerGame extends Minigame {
       const d = hDist(nx, ny, p.x, p.y);
       if (d < bd) { bd = d; best = n; }
     }
-    if (best && bd < HIT_R) {
+    if (best && bd < HIT_R * this.zoneScale) {
       best.hits++;
       this.hitsDone++;
       const p = this.nailPos(best);

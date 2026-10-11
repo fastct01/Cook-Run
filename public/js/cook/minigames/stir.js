@@ -12,6 +12,7 @@ export class StirGame extends Minigame {
     super(params, ctx);
     this.duration = params.duration ?? 5;
     this.target = params.targetRps ?? 1.0;
+    this.tol = TOL * this.zoneScale;   // difficulty: ±tempo that counts as "good"
     this.rps = 0;              // smoothed measured revolutions per second
     this.elapsed = 0;          // active stirring time (progress)
     this.good = 0;             // time at a good tempo
@@ -33,8 +34,8 @@ export class StirGame extends Minigame {
   get cursor() { return 'grab'; }
   get zone() {
     const r = this.rps / this.target;
-    if (r < 1 - TOL) return 'slow';
-    if (r > 1 + TOL) return 'fast';
+    if (r < 1 - this.tol) return 'slow';
+    if (r > 1 + this.tol) return 'fast';
     return 'good';
   }
   get fumesPerSec() { return (this.params.fumesPerSec || 0) * (this.rps > 0.15 ? 1 : 0.4); }
@@ -73,7 +74,7 @@ export class StirGame extends Minigame {
     if (this.rps > 0.15) {
       this.elapsed += dt;
       const r = this.rps / this.target;
-      const q = clamp(1 - Math.max(0, Math.abs(r - 1) - 0.1) / (TOL + 0.25), 0, 1);
+      const q = clamp(1 - Math.max(0, Math.abs(r - 1) - 0.1 * this.zoneScale) / (this.tol + 0.25), 0, 1);
       this.weighted += q * dt;
       if (this.zone === 'good') this.good += dt;
       this.idle = 0;
@@ -152,9 +153,9 @@ export class StirGame extends Minigame {
     const maxR = this.target * 2.2;
     const yOf = (r) => my1 - (clamp(r, 0, maxR) / maxR) * (my1 - my0);
     g.fillStyle = rgba(T.good, 0.85);
-    g.fillRect(mx - mw / 2 + 3, yOf(this.target * (1 + TOL)), mw - 6, yOf(this.target * (1 - TOL)) - yOf(this.target * (1 + TOL)));
+    g.fillRect(mx - mw / 2 + 3, yOf(this.target * (1 + this.tol)), mw - 6, yOf(this.target * (1 - this.tol)) - yOf(this.target * (1 + this.tol)));
     g.fillStyle = rgba(T.bad, 0.7);
-    g.fillRect(mx - mw / 2 + 3, my0 + 3, mw - 6, yOf(this.target * (1 + TOL)) - my0 - 3);
+    g.fillRect(mx - mw / 2 + 3, my0 + 3, mw - 6, yOf(this.target * (1 + this.tol)) - my0 - 3);
     const ny = yOf(this.rps);
     poly(g, [[mx - mw / 2 - 0.035 * U, ny - 0.018 * U], [mx - mw / 2 + 0.005 * U, ny], [mx - mw / 2 - 0.035 * U, ny + 0.018 * U]], z === 'good' ? T.good : T.mustard);
     g.fillStyle = T.cream; g.fillRect(mx - mw / 2, ny - 2, mw, 4);

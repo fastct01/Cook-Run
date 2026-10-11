@@ -8,6 +8,14 @@
 //
 // Commands sent (protocol.js CMD): START_RECIPE, RECIPE_DONE, RECIPE_FAIL, EXPLOSION, CALLOUT.
 // Hazards (fumes / fire / curtains / vent) are simulated here and reported in LabState.
+//
+// Round 3 difficulty levers (data.rules.cook ?? Hard defaults, set by shared/difficulty.js):
+//   hurtMult       × fume / fire damage to Doc (LabState.cookHurt)          Easy 0.6 · Hard 1 · Extreme 1.5
+//   zoneScale      × minigame target zones (measure band, heat band, stir tempo, cool level, hammer)
+//   burnerFireMult × how readily the unwatched burner runs away and catches fire (heat step)
+//   spillMult      × the bump strength the minigames feel (feel.bumpHit) → spills / splashes
+// Round 3 shop run: setShopProgress({ stopId, label, frac, tLeft } | null) → LabState.shop
+// (main.js feeds it from ShopChallenge onProgress; the host shows it as stop.docShop).
 import { CMD, EV } from '../shared/protocol.js';
 import { Rng, hashSeed } from '../sim/rng.js';
 import { createMinigame, STEP_WEIGHTS } from './minigames/index.js';
@@ -33,6 +41,13 @@ const GROUPS = Object.freeze({ product: 'Products', gadget: 'Gadgets', repair: '
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
+/** Difficulty levers for the lab (rules.cook; every value defaults to Hard = 1). */
+export function cookLevers(rules) {
+  const C = rules?.cook ?? {};
+  const num = (v, lo, hi) => (Number.isFinite(+v) && v !== null && v !== '' ? clamp(+v, lo, hi) : 1);
+  return { hurtMult: num(C.hurtMult, 0, 5), zoneScale: num(C.zoneScale, 0.3, 2.5), burnerFireMult: num(C.burnerFireMult, 0, 5), spillMult: num(C.spillMult, 0, 5) };
+}
+
 export class CookLab {
   /**
    * @param {object} data  loadData() result { lab, route, rules } (or the lab.json object itself)
@@ -51,6 +66,8 @@ export class CookLab {
     if (opts.onEvent) this._listeners.add(opts.onEvent);
     this._seed = opts.seed ?? 1;
     this._reqCounter = 0;
+    this.levers = cookLevers(this.data.rules);
+    this.shop = null;              // Doc's shop-run progress (Round 3) → LabState.shop
 
     // ── host-provided view of the world ──
     this.inv = { mat: {}, units: 0, quality: 0, gadgets: { smoke: 0, oil: 0, nitro: 0 } };
@@ -252,8 +269,13 @@ export class CookLab {
     const g = this.current;
     if (!g) return;
     // away from the station (presence mode 'station'): only the burner keeps going
-    const paused = this.awayFromStation && g.type !== 'heat';
-    if (!this.cookDown && !paused) g.update(dt, this.feel);
+    const away = this.awayFromStation;
+    const paused = away && g.type !== 'heat';
+    g.unwatched = away;
+    // difficulty: bumps hit the bench harder / softer (spillMult scales the bump the step feels)
+    const sm = this.levers.spillMult;
+    const feel = sm === 1 ? this.feel : { ...this.feel, bumpHit: Math.min(1.5, (this.feel.bumpHit || 0) * sm) };
+    if (!this.cookDown && !paused) g.update(dt, feel);
     if (g.type === 'heat') this.temp = g.temp;
     if (g.failed) { this._failBatch(g.failReason || 'ruined'); return; }
     if (g.done) {
@@ -287,8 +309,9 @@ export class CookLab {
     }
     // damage to the cook (reported in LabState.cookHurt)
     if (!this.cookDown) {
-      if (this.fumes > (H.fumesHurtAbove ?? 0.75)) this._cookHurt += (H.fumesCookDamagePerSec ?? 4) * dt;
-      if (this.fire > 0.05) this._cookHurt += (H.fireCookDamagePerSec ?? 2) * dt;
+      const hm = this.levers.hurtMult;   // difficulty
+      if (this.fumes > (H.fumesHurtAbove ?? 0.75)) this._cookHurt += (H.fumesCookDamagePerSec ?? 4) * hm * dt;
+      if (this.fire > 0.05) this._cookHurt += (H.fireCookDamagePerSec ?? 2) * hm * dt;
     }
   }
 
@@ -377,6 +400,7 @@ export class CookLab {
       emit: (type, d) => this._emit(type, { ...d, step: this.stepIndex }),
       toast: (text, tone) => this._toast(text, tone),
       startFire: (amt) => this.startFire(amt, 'overheat'),
+      levers: this.levers,
     });
     this._emit('stepStarted', { index: this.stepIndex, type: step.type, label: step.label });
   }
@@ -619,6 +643,22 @@ export class CookLab {
   pointerUp(nx, ny) { if (this.current) this.current.pointerUp(nx, ny); }
   key(code) { return this.inputEnabled ? !!this.current.key(code) : false; }
 
+  // ═══ Shop run (Round 3) ══════════════════════════════════════════════════════
+  /**
+   * Doc's shop-run progress while he is out of the van (ShopChallenge onProgress, ~4 Hz), or null when
+   * he's back. Sent to the host in LabState.shop → snapshot stop.docShop (the driver's "Doc: 2/3 · 0:21" chip).
+   * @param {null|{stopId, label, frac, tLeft}} p
+   */
+  setShopProgress(p) {
+    if (!p || typeof p !== 'object') { this.shop = null; return; }
+    this.shop = {
+      stopId: p.stopId != null ? String(p.stopId) : (this.shop?.stopId ?? null),
+      label: String(p.label ?? '').slice(0, 60),
+      frac: clamp(+p.frac || 0, 0, 1),
+      tLeft: Math.max(0, Math.round((+p.tLeft || 0) * 10) / 10),
+    };
+  }
+
   // ═══ Lab → host ══════════════════════════════════════════════════════════════
   /**
    * LabState exactly as protocol.js. `cookHurt` is hp lost since the previous call,
@@ -639,6 +679,7 @@ export class CookLab {
       ventOpen: this.ventOpen,
       curtains: this.curtainsClosed,
       cookHurt: hurt,
+      shop: this.shop ? { ...this.shop } : null,
     };
   }
 }

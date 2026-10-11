@@ -29,7 +29,52 @@
   <div id="overlay" hidden></div>
 </div>
 <div id="menu"></div>
-<div id="boot"><div class="boot-card"><div class="boot-logo">COOK <span>&amp;</span> RUN</div><div class="boot-msg">Warming up the engine…</div><div class="boot-bar"><i></i></div></div></div>
+<!-- #boot (LOBBY): the loading screen = a static frame of the title scene + a loading bar (styles in css/lobby.css).
+     main.js: #boot.gone hides it, #boot.error + .boot-msg text shows an error, window.__bootProgress(0..1) moves the bar. -->
+<div id="boot" class="crb">
+  <link rel="preload" href="vendor/fonts/archivo-latin-wdth-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="vendor/fonts/fraunces-latin-full-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <div class="crb-scene" aria-hidden="true"></div>
+  <div class="crb-front">
+    <div class="crb-brand">
+      <div class="crl-logo" role="img" aria-label="Cook and Run"><span class="crl-logo-l1" aria-hidden="true">Cook</span><span class="crl-logo-l2" aria-hidden="true"><span class="crl-amp">&amp;</span>Run</span></div>
+      <p class="crl-tagline">One drives. One cooks. Nobody gets busted.</p>
+    </div>
+    <section class="crb-load" role="status" aria-label="Loading">
+      <div class="crb-row">
+        <span class="crl-label crb-ok">Loading</span><span class="crl-label crb-err">Can’t start</span>
+        <span class="crb-msgs"><span>Paving 40 km of desert road</span><span>Stocking the lab in the back</span><span>Waking up the county cops</span></span>
+        <span class="crb-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+      </div>
+      <p class="boot-msg"></p>
+      <div class="crb-track" aria-hidden="true"><i class="crb-fill"></i><span class="crb-ride"><svg viewBox="0 0 22 12"><path d="M1.5 3.2A2 2 0 0 1 3.5 1.2H15.5L19.4 4.6H21V9H1.5z" fill="#F1ECE4" stroke="#0E0F11" stroke-width="1"/><rect x="4" y="3" width="4" height="2.4" rx=".5" fill="#0E0F11"/><rect x="9.5" y="3" width="4" height="2.4" rx=".5" fill="#0E0F11"/><path d="M15.6 3h1.4l1.4 1.6h-2.8z" fill="#0E0F11"/><rect x="1.5" y="6.4" width="19.5" height="1.2" fill="#5FB3A8"/><circle cx="5.5" cy="9.6" r="1.8" fill="#0E0F11"/><circle cx="16.5" cy="9.6" r="1.8" fill="#0E0F11"/></svg></span></div>
+    </section>
+  </div>
+  <script>
+    // window.__bootProgress(p): p = 0..1, never moves backwards. Until main.js reports real progress the bar
+    // creeps toward 85 % on its own (module download time is unknown up front).
+    (function () {
+      var b = document.getElementById('boot');
+      if (!b) return;
+      var fill = b.querySelector('.crb-fill'), ride = b.querySelector('.crb-ride');
+      var p = 0, real = false, t0 = Date.now();
+      function set(v) {
+        v = Math.max(0, Math.min(1, +v || 0));
+        if (v < p) return;
+        p = v;
+        if (fill) fill.style.transform = 'scaleX(' + v.toFixed(3) + ')';
+        if (ride) ride.style.transform = 'translateX(' + (v * 100).toFixed(1) + '%)';
+        b.style.setProperty('--boot-p', v.toFixed(3));
+      }
+      window.__bootProgress = function (v) { real = true; set(v); };
+      (function creep() {
+        if (real || b.classList.contains('gone')) return;
+        set(0.85 * (1 - Math.exp(-(Date.now() - t0) / 2600)));
+        setTimeout(creep, 180);
+      })();
+    })();
+  </script>
+</div>
 <noscript><p style="color:#f1ead8;font:16px system-ui;padding:24px">Cook &amp; Run needs JavaScript and WebGL.</p></noscript>
 <script type="module" src="js/main.js"></script>
 </body>

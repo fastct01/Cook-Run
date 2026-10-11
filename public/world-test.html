@@ -35,14 +35,22 @@
 //   &t=<sec>                      advance the script before the first frame (deterministic)
 //   &angle=<rad>                  drawbridge leaf angle       &door=0..1 garage door (with &garage=1)
 //   &looted=id,id                 looted stops                &shot=1 hide UI   &label=0 hide title  &title=text
+//   R3-GARAGE start district: ?start=top|back|left|door|turn   (top/back/left: fixed cameras as in NOTES-r3-start.md;
+//                door: the driver's cab at the open garage door (CAB's FirstPersonDriver); turn: the cab after the right turn)
+//                &arrows=1 (engine on: the way-out chevrons + OUT arrow lit) · &district=0 (the district off, for "before" numbers)
+//                &doorZ=-0.8 (door pose: RV-local z in the garage frame)
 // window.__world = { view, gen, presets, goto(z), setHour(h), stats(), settled(), advance(sec) }
 // ─────────────────────────────────────────────────────────────────────────────
 import * as THREE from 'three';
 import { loadData } from './js/data/loadData.js';
 import { WorldView } from './js/render/WorldView.js';
 import { FakeSnapshots } from './js/render/fakeSnapshots.js';
+import { structureLayout } from './js/sim/structures.js';
 
 const q = new URLSearchParams(location.search);
+// R3-GARAGE: start-district harness switches (see the header)
+const START = q.get('start');
+if (q.get('district') === '0') globalThis.__r3NoStartDistrict = true;
 const data = await loadData();
 const route = data.route;
 const AREA_Z = { ironworks: 330, downtown: 3560, oldtown: 8470, docks: 11560, suburbs: 14660, interstate: 19870, stripmall: 26420, farmland: 29640, foothills: 32240, saltflats: 35520, ghosttown: 37150, canyon: 38380, hideout: 39560 };
@@ -62,7 +70,7 @@ Object.assign(PRESETS, {
 });
 for (const st of route.stops) PRESETS['stop_' + st.id] = { z: st.z - 330, label: 'Stop: ' + st.name, group: 'stop' };
 
-const key = q.get('z') || 'ironworks';
+const key = q.get('z') || (START ? 'garage' : 'ironworks');
 const P = PRESETS[key] ? { ...PRESETS[key] } : { z: +key || 300, label: 'z ' + (+key || 300) };
 const num = (k, d) => (q.has(k) && q.get(k) !== '' && isFinite(+q.get(k)) ? +q.get(k) : d);
 const hour = num('hour', null);
@@ -110,20 +118,49 @@ const controllers = {
     cam.fov = 60; cam.updateProjectionMatrix(); cam.lookAt(tgt);
   } },
 };
-if (controllers[camMode]) view.setCameraController(controllers[camMode]);
+if (controllers[camMode] && !START) view.setCameraController(controllers[camMode]);
+
+// ── R3-GARAGE: start district views ──
+let startPose = null, fp = null;
+if (START) {
+  const G = structureLayout(view.track, route).garage;
+  const parkAt = (lz) => { const p = G.toWorld(2.2, lz); return { x: p.x, z: p.z, yaw: G.rotY }; };
+  const laneU = view.track.laneU(60, 1);
+  startPose = START === 'door' ? parkAt(num('doorZ', -0.8)) : START === 'turn' ? { x: view.track.xAt(60, laneU), z: 60, yaw: view.track.headingAt(60) } : parkAt(-2.2);
+  const fixed = (pos, lk, fov = 60) => ({ update(dt, cam) { cam.position.set(...pos); cam.up.set(0, 1, 0); cam.lookAt(...lk); cam.fov = fov; cam.near = 0.25; cam.updateProjectionMatrix(); } });
+  const CAMS = { top: fixed([-10, 70, -30], [0, 0, 45]), back: fixed([1.5, 2.2, 75], [1.5, 2, 0]), left: fixed([1.5, 2.2, 60], [60, 2, 40]), above: fixed([-40, 34, 30], [-12, 0, 44], 55) };
+  if (CAMS[START]) view.setCameraController(CAMS[START]);
+  else {
+    try {
+      const { FirstPersonDriver } = await import('./js/render/fp/FirstPersonDriver.js');
+      fp = new FirstPersonDriver(view, data, { pointerLock: false, mirrors: q.get('mirrors') !== '0' });
+      await fp.ready; fp.setActive(true);
+    } catch (e) { console.warn('[world-test] FirstPersonDriver unavailable', e && e.message); }
+  }
+  document.getElementById('label').textContent = q.get('title') || `Start district — ${START}${q.get('district') === '0' ? ' (off)' : ''}`;
+}
+function startSnap(snap) {
+  if (!startPose) return snap;
+  const rv = { ...snap.rv, x: startPose.x, y: 0, z: startPose.z, yaw: startPose.yaw, pitch: 0, roll: 0, speed: 0, steer: 0, airborne: false };
+  const out = { ...snap, rv, ents: [], events: [], feel: { latAcc: 0, bump: 0, speed: 0 } };
+  if (q.get('arrows') === '1') { out.phase = 'countdown'; out.garage = { ...(snap.garage || {}), items: { ...((snap.garage && snap.garage.items) || {}), door: 1, engine: 'on' } }; }
+  else { out.phase = 'drive'; out.garage = null; }   // door open, nothing lit (the cab view runs outside the garage phase)
+  return out;
+}
 
 // ── loop ──
 let T = 0, last = performance.now(), paused = false;
 function step(dt, draw = true) {
   T += dt;
-  const snap = gen.snapshot(T);
+  const snap = startSnap(gen.snapshot(T));
+  if (fp) fp.update(dt, snap);
   view.pushSnapshot(snap, { interpolate: false });
   view.render(dt, { draw });
 }
 const advance = (sec, dt = 1 / 30) => { const n = Math.max(1, Math.round(sec / dt)); for (let i = 0; i < n; i++) step(dt, i === n - 1); };
 if (q.has('t')) advance(+q.get('t'));
 window.__world = {
-  view, gen, presets: PRESETS, advance,
+  view, gen, presets: PRESETS, advance, fp, arrows: () => view.structures?.exitArrows?.debug?.() ?? null,
   goto(z) { gen.P.start = z; T = 0; step(0); },
   setHour(h) { view.setHourOverride(h); gen.hour = h; },
   stats: () => ({ ...view.stats, z: +(view.cur?.rv?.z ?? 0).toFixed(1), T: +T.toFixed(2), built: view.chunks?.stats.built, disposed: view.chunks?.stats.disposed, maxBuildMs: +(view.chunks?.stats.maxBuildMs ?? 0).toFixed(1) }),

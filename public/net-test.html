@@ -41,10 +41,10 @@
 
     function onStart(p) {
       net = p.net;
-      const summary = { mode: p.mode, role: p.role, seed: p.seed, roomCode: p.roomCode, you: p.you, isHost: p.isHost, players: p.players, net: p.net ? 'NetClient' : null };
+      const summary = { mode: p.mode, role: p.role, seed: p.seed, roomCode: p.roomCode, you: p.you, isHost: p.isHost, difficulty: p.difficulty, players: p.players, net: p.net ? 'NetClient' : null };
       window.__starts.push(summary);
       out.textContent = JSON.stringify(summary, null, 2);
-      document.title = `START ${p.mode} ${p.role} ${p.seed}`;
+      document.title = `START ${p.mode} ${p.role} ${p.seed} ${p.difficulty}`;
       game.hidden = false;
       if (offGame) offGame();
       if (p.mode === 'solo') {

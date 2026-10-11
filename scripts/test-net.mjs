@@ -2,8 +2,9 @@
 // Network tests for Cook & Run.
 //
 //   node scripts/test-net.mjs            protocol + relay + HTTP tests (needs only node + ws)
-//   node scripts/test-net.mjs --browser  also runs the headless Chromium lobby check (Python Playwright)
-//                                        and saves screenshots to docs/lobby-*.png
+//   node scripts/test-net.mjs --browser  also runs the headless Chromium lobby check (Python Playwright):
+//                                        title scene motion + RV pass hook, room, difficulty, START, solo
+//   ... --browser --save-shots           keep the screenshots in docs/lobby-*.png (default: a temp dir)
 //
 // Starts server/index.js as a child process on a random free port, drives it with
 // raw `ws` clients and with the real browser-side NetClient/LocalBus modules
@@ -20,6 +21,7 @@ import WebSocket from 'ws';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const WANT_BROWSER = process.argv.includes('--browser');
+const SAVE_SHOTS = process.argv.includes('--save-shots');
 const VERBOSE = process.argv.includes('--verbose');
 
 let passed = 0;
@@ -167,6 +169,7 @@ async function protocolTests(base) {
   const nm = roomA.players[0].name;
   check('name sanitised (no <>, zero-width, ≤16 chars)', nm.length <= 16 && !/[<>​\t]/.test(nm) && nm.startsWith('Rook'), JSON.stringify(nm));
   check('ROOM carries state:"lobby"', roomA.state === 'lobby');
+  check('ROOM carries difficulty:"hard" by default', roomA.difficulty === 'hard', roomA.difficulty);
 
   // bad joins
   B.send({ t: 'join', code: 'ZZ', name: 'Doc' });
@@ -209,6 +212,28 @@ async function protocolTests(base) {
   const sw2 = await A.wait('room'); await B.wait('room');
   check('swap back', roleOf(sw2, idA) === 'driver' && roleOf(sw2, idB) === 'cook');
 
+  // difficulty (Round 3: C2S.SETTINGS { difficulty }, host only, lobby only)
+  check('joiner sees difficulty:"hard"', roomB.difficulty === 'hard' && sw2.difficulty === 'hard');
+  A.send({ t: 'ready', ready: true }); await A.wait('room'); await B.wait('room');
+  A.send({ t: 'settings', difficulty: 'extreme' });
+  const [dA, dB] = await Promise.all([A.wait('room'), B.wait('room')]);
+  check('SETTINGS from host → both get ROOM with the new difficulty', dA.difficulty === 'extreme' && dB.difficulty === 'extreme', `${dA.difficulty}/${dB.difficulty}`);
+  check('SETTINGS resets nothing else (ready, roles, host, state kept)', dA.players.find((p) => p.id === idA)?.ready === true
+    && roleOf(dA, idA) === 'driver' && roleOf(dA, idB) === 'cook' && dA.hostId === idA && dA.state === 'lobby');
+  for (const bad of [{ difficulty: 'nightmare' }, { difficulty: 'EASY' }, { difficulty: 2 }, {}]) {
+    A.send({ t: 'settings', ...bad });
+    const e = await tryWait(A.wait('error'));
+    check(`SETTINGS ${JSON.stringify(bad)} → ERROR badRequest (re:settings)`, e.code === 'badRequest' && e.re === 'settings', JSON.stringify(e));
+  }
+  check('rejected SETTINGS are not broadcast', await B.none((m) => m.t === 'room', 150));
+  B.send({ t: 'settings', difficulty: 'easy' });
+  const eNH = await B.wait('error');
+  check('SETTINGS from non-host → ERROR notHost', eNH.code === 'notHost' && eNH.re === 'settings', JSON.stringify(eNH));
+  A.send({ t: 'settings', difficulty: 'extreme' });
+  const same = await A.wait('room');
+  check('same difficulty again → ROOM to the sender only (idempotent)', same.difficulty === 'extreme' && await B.none((m) => m.t === 'room', 150));
+  A.send({ t: 'ready', ready: false }); await A.wait('room'); await B.wait('room');
+
   // start guards
   A.send({ t: 'start' });
   const e6 = await A.wait('error');
@@ -235,8 +260,13 @@ async function protocolTests(base) {
   const [sA, sB] = await Promise.all([A.wait('start'), B.wait('start')]);
   check('START → both receive START with the same 32-bit seed', Number.isInteger(sA.seed) && sA.seed >= 0 && sA.seed <= 0xffffffff && sA.seed === sB.seed, `${sA.seed} vs ${sB.seed}`);
   check('START roles map', sA.roles[idA] === 'driver' && sA.roles[idB] === 'cook' && isDeepStrictEqual(sA.roles, sB.roles));
+  check('START carries the room difficulty (both players)', sA.difficulty === 'extreme' && sB.difficulty === 'extreme', `${sA.difficulty}/${sB.difficulty}`);
   const playingRoom = await A.wait('room'); await B.wait('room');
-  check('room state → playing', playingRoom.state === 'playing');
+  check('room state → playing', playingRoom.state === 'playing' && playingRoom.difficulty === 'extreme');
+  A.send({ t: 'settings', difficulty: 'easy' });
+  const eLock = await A.wait('error');
+  check('SETTINGS after START → ERROR started (locked)', eLock.code === 'started' && eLock.re === 'settings', JSON.stringify(eLock));
+  check('locked SETTINGS not broadcast', await B.none((m) => m.t === 'room', 150));
 
   // no joiners while playing
   const D = new TC(WS, 'D'); await D.open();
@@ -274,15 +304,20 @@ async function protocolTests(base) {
   B.send({ t: 'lobby' });
   const lb = await A.wait((m) => m.t === 'room' && m.state === 'lobby'); await B.wait('room');
   check("{t:'lobby'} returns room to lobby, ready cleared", lb.players.every((p) => p.ready === false) && lb.players.length === 2);
+  check('difficulty survives the trip back to the lobby', lb.difficulty === 'extreme', lb.difficulty);
   A.send({ t: 'lobby' }); // idempotent
   const lb2 = await A.wait('room');
   check("second {t:'lobby'} is idempotent", lb2.state === 'lobby');
   check('GAME after lobby is not relayed', await (async () => { A.send({ t: 'g', m: { k: 'chat', text: 'x' } }); return B.none((m) => m.t === 'g', 150); })());
+  A.send({ t: 'settings', difficulty: 'easy' });
+  const [dl, dl2] = await Promise.all([A.wait('room'), B.wait('room')]);
+  check('host can change the difficulty again back in the lobby', dl.difficulty === 'easy' && dl2.difficulty === 'easy');
   A.send({ t: 'ready', ready: true }); B.send({ t: 'ready', ready: true });
   await sleep(100); A.drain(); B.drain();
   A.send({ t: 'start' });
   const [s2A, s2B] = await Promise.all([A.wait('start'), B.wait('start')]);
   check('restart after lobby → new START, same seed both sides', s2A.seed === s2B.seed);
+  check('restart START carries the new difficulty', s2A.difficulty === 'easy' && s2B.difficulty === 'easy');
   await A.wait('room'); await B.wait('room');
 
   // rate limit
@@ -292,9 +327,13 @@ async function protocolTests(base) {
   const pongs = R.drain().filter((m) => m.t === 'pong').length;
   check(`rate limit drops excess silently (${pongs}/500 answered)`, pongs >= 150 && pongs <= 300 && !R.closed, `pongs=${pongs}`);
   await sleep(300);
-  R.send({ t: 'ping', at: 7 });
-  const p2 = await tryWait(R.wait('pong'));
-  check('socket still usable after throttling', p2.at === 7);
+  // Under a loaded machine late pongs from the flood can still trickle in: wait for this probe's own pong.
+  let p2 = null;
+  for (let i = 0; i < 3 && !(p2 && p2.at === 7); i++) {
+    R.send({ t: 'ping', at: 7 });
+    p2 = await tryWait(R.wait((m) => m.t === 'pong' && m.at === 7, 1500, 'pong 7'));
+  }
+  check('socket still usable after throttling', p2 && p2.at === 7, JSON.stringify(p2));
   R.close();
 
   // peer left
@@ -313,6 +352,10 @@ async function protocolTests(base) {
   const pl2 = await E.wait('peerLeft');
   const hostR = await E.wait('room');
   check('LEAVE → other gets PEER_LEFT and becomes host', pl2.id === idA && hostR.hostId === re.you);
+  check('difficulty survives host migration', hostR.difficulty === 'easy', hostR.difficulty);
+  E.send({ t: 'settings', difficulty: 'hard' });
+  const eh = await tryWait(E.wait('room'));
+  check('the new host may change the difficulty', eh.difficulty === 'hard', JSON.stringify(eh).slice(0, 120));
   E.close(); A.close();
   await sleep(200);
   const h2 = await (await fetch(`${base.http}/healthz`)).json();
@@ -379,7 +422,7 @@ async function clientModuleTests(base) {
     const startB = new Promise((r) => b.on('start', r));
     a.send({ t: 'start' });
     const st = await startB;
-    check('NetClient on("start") receives seed+roles', Number.isInteger(st.seed) && st.roles[b.id] === 'cook');
+    check('NetClient on("start") receives seed+roles+difficulty', Number.isInteger(st.seed) && st.roles[b.id] === 'cook' && st.difficulty === 'hard');
     const got = [];
     const off = b.onGame((m, from) => got.push({ m, from }));
     a.sendGame({ k: 'chat', text: 'COPS!' });
@@ -451,14 +494,29 @@ def run(p):
         A.wait_for_timeout(600)
         A.fill('#crl-name', 'Rook')
         shot(A, f'lobby-title-{tag}.png')
+        # the live title scene: traffic moves (transform changes), the RV pass hook works
+        st = A.evaluate('window.__titleScene && window.__titleScene.stats()')
+        ck(f'{tag}: title scene running (traffic + tumbleweeds)', st and st['running'] >= 3 and st['mode'] == 'title', st)
+        ck(f'{tag}: phones get half the traffic', st and st['traffic'] == (2 if mobile else 3), st)
+        t1 = A.evaluate("getComputedStyle(document.querySelector('[data-veh=carA]')).transform")
+        A.wait_for_timeout(700)
+        t2 = A.evaluate("getComputedStyle(document.querySelector('[data-veh=carA]')).transform")
+        ck(f'{tag}: traffic actually moves', t1 != t2, (t1, t2))
+        A.evaluate('window.__titleScene.rvPass({ cop: true })'); A.wait_for_timeout(1200)
+        st = A.evaluate('window.__titleScene.stats()')
+        ck(f'{tag}: RV pass with a cop on demand (test hook)', st['rvDriving'] and st['copDriving'], st)
+        A.click('.crl-seg [data-diff="extreme"]')
+        ck(f'{tag}: solo difficulty control', A.get_attribute('.crl-seg [data-diff="extreme"]', 'aria-checked') == 'true')
+        A.click('.crl-seg [data-diff="hard"]')
         A.click('[data-act="howto"]'); A.wait_for_selector('dialog.crl-modal[open]'); A.wait_for_timeout(350)
         ck(f'{tag}: how-to modal opens', A.is_visible('dialog.crl-modal[open]'))
         shot(A, f'lobby-howto-{tag}.png')
         A.keyboard.press('Escape'); A.wait_for_timeout(150)
         ck(f'{tag}: Escape closes modal', not A.is_visible('dialog.crl-modal[open]'))
-        A.click('[data-act="create"]'); A.wait_for_selector('.crl-plate-code')
-        A.wait_for_function("document.querySelector('.crl-plate-code').textContent.length === 4")
-        code = A.text_content('.crl-plate-code')
+        A.click('[data-act="create"]'); A.wait_for_selector('.crl-roomcode')
+        A.wait_for_function("document.querySelector('.crl-roomcode').textContent.length === 4")
+        code = A.text_content('.crl-roomcode')
+        ck(f'{tag}: room starts on Hard', A.get_attribute('[data-bind="diff"] [data-diff="hard"]', 'aria-checked') == 'true')
         invite = A.input_value('.crl-invite-url')
         ck(f'{tag}: invite link has ?room=CODE', invite.endswith('/?room=' + code), invite)
         A.click('[data-act="copy"]'); A.wait_for_timeout(200)
@@ -470,7 +528,7 @@ def run(p):
         ck(f'{tag}: Join button focused for invited player', B.evaluate("document.activeElement && document.activeElement.dataset.act") == 'join')
         B.fill('#crl-name', 'Doc')
         B.keyboard.press('Enter')
-        B.wait_for_selector('.crl-plate-code')
+        B.wait_for_selector('.crl-roomcode')
         A.wait_for_function("document.querySelectorAll('.crl-role.is-taken').length === 1")
         ck(f'{tag}: A sees B in the cook seat', 'Doc' in A.text_content('.crl-role--cook'))
         # roles: B takes driver via swap, then swap back (exercise the cards)
@@ -484,20 +542,30 @@ def run(p):
         B.click('[data-act="ready"]')
         A.wait_for_function("!document.querySelector('[data-act=\"start\"]').disabled")
         ck(f'{tag}: guest sees Host starts (disabled)', B.is_disabled('[data-act="start"]'))
+        # difficulty: the host picks, the guest sees it read-only
+        A.click('[data-bind="diff"] [data-diff="extreme"]')
+        B.wait_for_function("document.querySelector('[data-bind=diff] [data-diff=extreme]').getAttribute('aria-checked') === 'true'")
+        ck(f'{tag}: guest sees the host pick Extreme', True)
+        ck(f'{tag}: guest difficulty rows are read-only', B.get_attribute('[data-bind="diff"] [data-diff="easy"]', 'aria-disabled') == 'true')
+        B.click('[data-bind="diff"] [data-diff="easy"]', force=True); B.wait_for_timeout(250)
+        ck(f'{tag}: guest click does not change it', A.get_attribute('[data-bind="diff"] [data-diff="extreme"]', 'aria-checked') == 'true')
+        ck(f'{tag}: ready flags kept after a difficulty change', not A.is_disabled('[data-act="start"]'))
         shot(A, f'lobby-room-ready-{tag}.png')
         A.click('[data-act="start"]')
         A.wait_for_function("window.__starts.length === 1"); B.wait_for_function("window.__starts.length === 1")
         sa = A.evaluate('window.__starts[0]'); sb = B.evaluate('window.__starts[0]')
         ck(f'{tag}: both onStart fired, online, same seed', sa['mode'] == 'online' == sb['mode'] and sa['seed'] == sb['seed'] and sa['roomCode'] == code, (sa, sb))
         ck(f'{tag}: roles driver/cook', sa['role'] == 'driver' and sb['role'] == 'cook')
+        ck(f'{tag}: onStart difficulty = the room pick on both sides', sa.get('difficulty') == 'extreme' == sb.get('difficulty'), (sa.get('difficulty'), sb.get('difficulty')))
         ck(f'{tag}: document.title shows START', A.title().startswith('START online driver'))
         # game traffic through the NetClient handed to onStart
         A.click('#ping-peer'); B.wait_for_function("window.__game.length === 1")
         ck(f'{tag}: game msg relayed via net from onStart', B.evaluate('window.__game[0].text') == 'COPS!')
         # back to room (resumeRoom), restart
         A.click('#back-room'); B.click('#back-room')
-        A.wait_for_selector('.crl-plate-code'); B.wait_for_selector('.crl-plate-code')
-        ck(f'{tag}: resumeRoom shows same room code', A.text_content('.crl-plate-code') == code == B.text_content('.crl-plate-code'))
+        A.wait_for_selector('.crl-roomcode'); B.wait_for_selector('.crl-roomcode')
+        ck(f'{tag}: resumeRoom shows same room code', A.text_content('.crl-roomcode') == code == B.text_content('.crl-roomcode'))
+        ck(f'{tag}: resumed room keeps the difficulty', B.get_attribute('[data-bind="diff"] [data-diff="extreme"]', 'aria-checked') == 'true')
         A.click('[data-act="ready"]'); B.wait_for_function("document.querySelector('.crl-role--driver').classList.contains('is-ready')")
         B.click('[data-act="ready"]'); A.wait_for_function("!document.querySelector('[data-act=\"start\"]').disabled")
         A.click('[data-act="start"]')
@@ -515,9 +583,11 @@ def run(p):
             B.wait_for_timeout(250); shot(B, 'lobby-error-desktop.png', toasts=True)
         # solo
         B.goto(base + '/net-test.html'); B.wait_for_selector('.crl-menu')
+        B.click('.crl-seg [data-diff="easy"]')
         B.click('[data-act="solo"]'); B.wait_for_function("window.__starts.length === 1")
         so = B.evaluate('window.__starts[0]')
         ck(f'{tag}: Play Solo → onStart(mode solo, net null, numeric seed)', so['mode'] == 'solo' and so['net'] is None and isinstance(so['seed'], int))
+        ck(f'{tag}: solo onStart carries the title pick (easy)', so.get('difficulty') == 'easy', so.get('difficulty'))
         B.wait_for_function("window.__game.length === 1")
         ck(f'{tag}: horizontal overflow none', A.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1"))
         ctxA.close(); ctxB.close()
@@ -540,10 +610,10 @@ async function browserTests(base) {
   mkdirSync(dir, { recursive: true });
   const py = join(dir, 'lobby_check.py');
   writeFileSync(py, PY);
-  const outdir = join(ROOT, 'docs');
+  const outdir = SAVE_SHOTS ? join(ROOT, 'docs') : join(dir, 'shots');
   mkdirSync(outdir, { recursive: true });
-  const r = spawnSync('python3', ['-I', py, base.http, outdir], { encoding: 'utf8', timeout: 180000 });
-  rmSync(dir, { recursive: true, force: true });
+  const r = spawnSync('python3', ['-I', py, base.http, outdir], { encoding: 'utf8', timeout: 240000 });
+  rmSync(SAVE_SHOTS ? join(dir, 'lobby_check.py') : dir, { recursive: true, force: true });
   const line = (r.stdout || '').split('\n').find((l) => l.startsWith('@@RESULT@@'));
   if (!line) {
     check('browser script ran', false, (r.stderr || r.stdout || '').slice(-2000));
@@ -552,7 +622,8 @@ async function browserTests(base) {
   const res = JSON.parse(line.slice(10));
   for (const [name, ok, detail] of res.checks) check(name, ok, detail);
   check('no console errors / page errors', res.errors.length === 0, res.errors.slice(0, 5).join(' | '));
-  for (const s of res.shots) console.log(`        screenshot ${s}`);
+  if (SAVE_SHOTS) for (const s of res.shots) console.log(`        screenshot ${s}`);
+  else console.log(`        (${res.shots.length} screenshots discarded; add --save-shots to keep them in docs/)`);
 }
 
 // ── main ────────────────────────────────────────────────────────────────────

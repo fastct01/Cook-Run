@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cook &amp; Run — roof defence test</title>
+<meta name="description" content="Round 3 DEFEND harness: the real GameSim at a supply stop with cops, Rook on the roof with the guns (DefendClient), the outside view and the cop damage.">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/fonts.css">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/hud.css">
+<style>
+  html, body { margin: 0; height: 100%; background: #0E0F11; overflow: hidden; }
+  #stage { position: fixed; inset: 0; }
+  #view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #hud { position: absolute; inset: 0; pointer-events: none; }
+  #dbg { position: fixed; left: 50%; bottom: 0; transform: translateX(-50%); z-index: 60; display: flex; gap: 4px; flex-wrap: wrap; justify-content: center;
+         font: 600 11px/1 system-ui, sans-serif; color: #f1ead8; padding: 4px 6px; background: rgba(14,15,17,.7); border-radius: 6px 6px 0 0; pointer-events: auto; }
+  #dbg button { color: #F2B90F; padding: 3px 6px; border-radius: 4px; background: rgba(255,255,255,.06); border: 0; font: inherit; cursor: pointer; }
+  #dbg span { padding: 3px 4px; opacity: .8; font-variant-numeric: tabular-nums; }
+  body.shot #dbg { display: none; }
+  body.outside #hud { display: none; }
+  #err { position: fixed; left: 8px; top: 8px; z-index: 70; color: #ffb4a0; font: 12px monospace; white-space: pre-wrap; max-width: 90vw; }
+</style>
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+</head>
+<body>
+<div id="stage"><canvas id="view" aria-label="Game view"></canvas><div id="hud"></div></div>
+<div id="dbg">
+  <button data-a="defend">F defend</button><button data-a="s1">1</button><button data-a="s2">2</button><button data-a="s3">3</button>
+  <button data-a="s4">4</button><button data-a="s5">5</button><button data-a="s6">6</button>
+  <button data-a="aim">aim cop</button><button data-a="fire">fire</button><button data-a="ads">RMB</button><button data-a="reload">R</button>
+  <button data-a="out">outside</button><span id="st"></span>
+</div>
+<div id="err"></div>
+<script type="module">
+// ─────────────────────────────────────────────────────────────────────────────
+// defend-test — Round 3 DEFEND harness (agent DEFEND). The REAL GameSim (skipped to the drive phase), parked
+// in a supply-stop lot (or on the road) with stars and police cars close by; the real WorldView + Hud +
+// DefendClient wired the way main.js should (docs/NOTES-r3-build-defend.md).
+//   ?stop=<id>|road   where to park (default: the first stop)      ?cops=3   extra police cars (0–4)
+//   ?seed=N  ?solo=1 (AI Rook at the stop)  ?difficulty=easy|hard|extreme  ?manual=1 (no real-time loop)
+//   ?hour=15.5  ?auto=0 (no police response)
+// window.__defend: advance(sec, fps) · frame() · defend(on) · key(code) · select(slot) · aimCop(i, part, wheel) ·
+//   aimWorld(x, y, z) · fire() · ads(on) · throw(device) · outside(az, el, dist) · inside() · cops() · state() ·
+//   snap() · settled() · ready (promise) · stats() · errors[]
+// ─────────────────────────────────────────────────────────────────────────────
+import * as THREE from 'three';
+import { loadData } from './js/data/loadData.js';
+import { GameSim } from './js/sim/GameSim.js';
+import { WorldView } from './js/render/WorldView.js';
+import { DefendClient } from './js/defend/DefendClient.js';
+import { copPartWorld, rvToWorld, worldToRv } from './js/sim/roof.js';
+
+const Q = new URLSearchParams(location.search);
+const errors = [];
+const errEl = document.getElementById('err');
+const report = (m) => { errors.push(String(m)); errEl.textContent += String(m).slice(0, 300) + '\n'; };
+addEventListener('error', (e) => report(e.message || e));
+addEventListener('unhandledrejection', (e) => report(e.reason && e.reason.stack || e.reason));
+if (Q.get('shot') === '1') document.body.classList.add('shot');
+
+let data = await loadData();
+try {
+  const D = await import('./js/shared/difficulty.js');
+  if (Q.get('difficulty')) data = D.withDifficulty(data, Q.get('difficulty'));
+} catch (e) { /* difficulty.js not landed */ }
+const seed = +(Q.get('seed') || data.route.defaultSeed || 1);
+const solo = Q.get('solo') === '1';
+const sim = new GameSim(data, { seed, solo });
+const DT = 1 / 60;
+sim.applyDriverCommand({ type: 'skipTutorial' });
+for (let i = 0; i < 600 && sim.phase !== 'drive'; i++) sim.step({ throttle: 0, steer: 0, handbrake: true }, DT);
+
+// ── park ──────────────────────────────────────────────────────────────────────
+const rv = sim.rv;
+const where = Q.get('stop') || data.route.stops[0].id;
+let stopDef = null;
+if (where === 'road') {
+  const z = +(Q.get('z') || 2200);
+  rv.z = z; rv.x = sim.road.xAt(z, sim.road.laneU(z, 1, 0)); rv.yaw = sim.road.heading(z);
+} else {
+  stopDef = data.route.stops.find((s) => s.id === where) || data.route.stops[0];
+  // in the lot, 3 m in from the shoulder (the road side: open sky, the shop behind)
+  const z = stopDef.z + 4, u = stopDef.side * (sim.track.halfWidth(z) + sim.track.shoulder(z) + 3.0);
+  rv.x = sim.track.xAt(z, u); rv.z = z; rv.yaw = sim.road.heading(z);
+}
+rv.vx = rv.vz = 0; rv.speed = 0; rv.w = 0;
+sim.traffic.frontier = rv.z + 40; sim.peds.frontier = rv.z + 40;
+sim.traffic.cars = sim.traffic.cars.filter((c) => Math.abs(c.z - rv.z) > 120);
+sim.heat.set(+(Q.get('heat') || 2.4));
+// police cars placed around the RV (RV-local: +X left, +Z front), facing it, slow
+const CAR_SPOTS = [[-9, 19, 'cop', 0.35], [8.5, -12, 'cop', 1.35], [-6, 44, 'cop_suv', 0.1], [12, 30, 'interceptor', -0.3]];
+const FREEZE = Q.get('freeze') !== '0';   // keep the placed cars on their spots (stills); ?freeze=0 lets them drive
+const nCops = Math.max(0, Math.min(4, +(Q.get('cops') ?? 3)));
+const placed = [];
+// which way (RV-local X) the road centre is from the RV
+const ROAD_SIDE = Math.sign(worldToRv(rv, sim.road.xAt(rv.z, 0), rv.z).x) || 1;
+for (let i = 0; i < nCops; i++) {
+  const [lx0, lz, kind, turn] = CAR_SPOTS[i];
+  const lx = Math.abs(lx0) * ROAD_SIDE * (i === 3 ? -0.4 : 1);   // the road side of the lot (open sky)
+  const p = rvToWorld(rv, lx, lz);
+  const yaw = Math.atan2(rv.x - p.x, rv.z - p.z) + turn;
+  const c = sim.cops._makeCop(kind, p.x, p.z, yaw, 0);
+  sim.cops.cops.push(c);
+  placed.push(c.id);
+  c._spot = { x: p.x, z: p.z, yaw };
+}
+function holdCars() {
+  if (!FREEZE) return;
+  for (const c of sim.cops.cops) if (c._spot) { c.x = c._spot.x; c.z = c._spot.z; c.yaw = c._spot.yaw; c.vx = c.vz = 0; c.speed = 0; c.w = 0; }
+}
+const idle = { throttle: 0, steer: 0, handbrake: true };
+for (let i = 0; i < 2; i++) sim.step(idle, DT);
+if (Q.get('auto') === '0' && stopDef) { try { sim.cops.cancelResponse?.(stopDef.id); } catch (e) { /* */ } }   // no police response (stills)
+
+// ── view + HUD + client (the main.js wiring) ──────────────────────────────────
+const canvas = document.getElementById('view');
+let audio = null;
+try { const A = await import('./js/render/audio.js'); audio = A.createAudio({ route: data.route }); } catch (e) { audio = null; }
+const view = new WorldView(canvas, data, { seed, role: 'driver', audio, pixelRatio: 1 });
+if (Q.get('hour')) view.setHourOverride(+Q.get('hour'));
+let hud = null;
+try { const H = await import('./js/ui/hud.js'); hud = new H.Hud(document.getElementById('hud'), data, { role: 'driver' }); hud.setDifficulty?.(data.difficulty || 'hard'); } catch (e) { console.warn('[defend-test] hud.js unavailable', e); }
+const d = new DefendClient(view, data, { hudRoot: document.getElementById('hud'), audio, sendDriverCommand: (c) => sim.applyDriverCommand(c) });
+window.__dc = d; window.__sim = sim; window.__view = view;
+let snap = sim.snapshot();
+view.pushSnapshot(snap);
+
+function tick(dt) {
+  sim.step(idle, dt);
+  holdCars();
+  snap = sim.snapshot();
+  view.pushSnapshot(snap);
+  d.update(dt, snap);
+  if (hud) { hud.setMode?.(d.active ? 'roof' : 'drive'); hud.update(snap); }
+}
+function render(dt, draw = true) { view.render(dt, { draw }); }
+
+// outside camera (a cook-like orbit around the RV)
+let outsideCam = null;
+function outside(az = 2.4, el = 0.32, dist = 17, look = 0) {
+  document.body.classList.add('outside');
+  const anchor = () => view.rvAnchor;
+  outsideCam = { az, el, dist, look, update(dt, camera) {
+    const a = anchor(); if (!a) return;
+    a.updateWorldMatrix(true, false);
+    const tgt = new THREE.Vector3(0, 2.6, this.look).applyMatrix4(a.matrixWorld);
+    const yaw = rv.yaw + this.az;
+    camera.position.set(tgt.x + Math.sin(yaw) * Math.cos(this.el) * this.dist, tgt.y + Math.sin(this.el) * this.dist, tgt.z + Math.cos(yaw) * Math.cos(this.el) * this.dist);
+    camera.lookAt(tgt); camera.fov = 50; camera.near = 0.25; camera.updateProjectionMatrix(); camera.layers.enable(1); camera.updateMatrixWorld();
+  } };
+  view.setCameraController(outsideCam);
+}
+function outsideAt(x, y, z, az = 0.8, el = 0.3, dist = 9) {
+  document.body.classList.add('outside');
+  outsideCam = { update(dt, camera) {
+    camera.position.set(x + Math.sin(az) * Math.cos(el) * dist, y + Math.sin(el) * dist, z + Math.cos(az) * Math.cos(el) * dist);
+    camera.lookAt(x, y, z); camera.fov = 45; camera.near = 0.25; camera.updateProjectionMatrix(); camera.layers.enable(1); camera.updateMatrixWorld();
+  } };
+  view.setCameraController(outsideCam);
+}
+function inside() { document.body.classList.remove('outside'); if (view.cameraController === outsideCam) view.setCameraController(d.active ? d.cam : null); outsideCam = null; }
+
+const api = {
+  errors, sim, view, d,
+  ready: view.ready,
+  frame(dt = 1 / 30) { tick(dt); render(dt); },
+  advance(sec, fps = 30, drawLast = true) {
+    const n = Math.max(1, Math.round(sec * fps)), dt = 1 / fps;
+    for (let i = 0; i < n; i++) { tick(dt); render(dt, drawLast ? i === n - 1 : false); }
+    return api.state();
+  },
+  defend(on = true) { return sim.applyDriverCommand({ type: 'defend', on }); },
+  key(code, down = true) { const r = d.onKey({ code, repeat: false }, down); if (down) d.onKey({ code, repeat: false }, false); return r; },
+  select(slot) { return d.select(slot); },
+  aimWorld(x, y, z) { return d.aimAtWorld(x, y, z); },
+  aimCop(i = 0, part = 'radiator', wheel = 'fl') {
+    const cops = sim.copsList().filter((c) => c.kind !== 'heli');
+    const c = typeof i === 'number' && i < 50 ? (cops.find((k) => k.id === placed[i]) || cops[i]) : cops.find((k) => k.id === i);
+    if (!c) return false;
+    const p = copPartWorld(c, part, wheel, rv);
+    return d.aimAtWorld(p.x, p.y, p.z);
+  },
+  fire() { return d.fire(); },
+  ads(on = true) { d.setAds(on); },
+  throw(dev) { return d.throw(dev); },
+  outside, inside, outsideAt,
+  copPos(i) { const c = sim.cops.cops.find((k) => k.id === placed[i]); return c ? { x: c.x, y: c.y, z: c.z, yaw: c.yaw } : null; },
+  cops() { return sim.copsList().filter((c) => c.kind !== 'heli').map((c) => ({ id: c.id, kind: c.kind, state: c.state, d: +Math.hypot(c.x - rv.x, c.z - rv.z).toFixed(1) })); },
+  state() { return { phase: sim.phase, bust: +sim.heat.bust.toFixed(2), stop: sim.stop, roof: { ...sim.roof.state(), fx: undefined }, client: d.debugState(), cops: api.cops(), copFx: snap.copFx, hp: +rv.hp.toFixed(1), rook: +sim.crew.driver.toFixed(1), stats: sim.roof.stats }; },
+  snap() { return snap; },
+  settled() { return view.isSettled(); },
+  stats() { return { ...view.stats }; },
+};
+window.__defend = api;
+await view.ready;
+// settle the world chunks without drawing
+for (let i = 0; i < 300 && !view.isSettled(); i++) { view.pushSnapshot(snap); render(1 / 30, false); }
+render(1 / 30);
+// buttons
+const btn = { defend: () => api.defend(), s1: () => api.select('revolver'), s2: () => api.select('shotgun'), s3: () => api.select('rifle'), s4: () => api.select('firecracker'), s5: () => api.select('balloon'), s6: () => api.select('flare'),
+  aim: () => api.aimCop(0, 'radiator'), fire: () => api.fire(), ads: () => api.ads(!d.ads), reload: () => api.key('KeyR'), out: () => (outsideCam ? inside() : outside()) };
+document.getElementById('dbg').addEventListener('click', (e) => { const a = e.target.dataset && e.target.dataset.a; if (a && btn[a]) btn[a](); });
+// real input like main.js
+addEventListener('keydown', (e) => { if (d.onKey(e, true)) { e.preventDefault(); return; } if (e.code === 'KeyF' && !e.repeat) api.defend(true); });
+addEventListener('keyup', (e) => { d.onKey(e, false); });
+for (const t of ['mousemove', 'mousedown', 'mouseup', 'contextmenu', 'wheel']) canvas.addEventListener(t, (e) => d.onPointer(e), { passive: false });
+// real-time loop unless ?manual=1
+if (Q.get('manual') !== '1') {
+  let last = performance.now();
+  const loop = (now) => {
+    const dt = Math.min(0.1, (now - last) / 1000); last = now;
+    tick(dt); render(dt);
+    document.getElementById('st').textContent = `bust ${(sim.heat.bust * 100).toFixed(0)}% · ${api.cops().map((c) => c.state).join(',')}`;
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
+}
+window.__ready = true;
+</script>
+</body>
+</html>

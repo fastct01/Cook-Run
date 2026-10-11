@@ -14,6 +14,11 @@ export class MeasureGame extends Minigame {
     super(params, ctx);
     this.min = params.targetMin ?? 0.6;
     this.max = params.targetMax ?? 0.75;
+    if (this.zoneScale !== 1) {
+      // difficulty: the green band widens / narrows around its centre
+      const c = (this.min + this.max) / 2, half = (this.max - this.min) / 2 * this.zoneScale;
+      this.min = clamp(c - half, 0.08, c); this.max = clamp(c + half, c, 0.97);
+    }
     this.rate = params.pourRate ?? 0.28;
     this.level = 0;
     this.pouring = false;

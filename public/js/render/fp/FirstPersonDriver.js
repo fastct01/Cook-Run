@@ -8,7 +8,15 @@
 //   fp.lookAround() → bool             // C key: 3 s outside orbit; false while on cooldown / inactive
 //   fp.cooldown                        // 0 = ready … 1 = just used (→ hud.setLookCooldown(fp.cooldown))
 //   fp.driveState                      // { rpm, gear, throttle, load, running } (→ audio.setDriveState)
+//   fp.setHandsVariant(v)              // R3: 0 gloves + yellow suit cuffs · 1 bare hands + red hoodie cuffs · null = auto
+//   fp.handsVariant · fp.cabKind ('rv_cab_fp_r3' | 'rv_cab_fp') · fp.rig (CabR3, debug)
 //   fp.destroy()
+//
+// Round 3 (agent CAB): the cab is `rv_cab_fp_r3` (cabR3.js drives its hands, horn, stalks, key, PRNDL, lamps,
+// radio dial and dash trinkets). Hands variant (auto): 0 unless Rook finished the garage unsuited
+// (snap.garage.rook.suited === false at the end of the garage; remembered afterwards). Look-around cooldown =
+// rules.driver.lookCooldown ?? 30. `new FirstPersonDriver(view, data, { cab: 'legacy' })` keeps the old
+// rv_cab_fp + CabInterior + CabArms (also the fallback if the R3 kind is missing).
 //
 // What it does
 //   • createModel('rv_cab_fp') under view.rvAnchor at userData.rvOffset (its rv_frame = RV-local).
@@ -41,10 +49,11 @@ import { WindscreenFog } from './windscreen.js';
 import { FpOverlay } from './overlay.js';
 import { CabInterior, RIM_R } from './cabInterior.js';
 import { CabArms } from './cabArms.js';
+import { CabR3, R3_KIND } from './cabR3.js';
 
 export const RV_LAYER = 1;                     // WorldView's RV body layer (not exported there)
 export const LOOK_SECONDS = 3;
-export const LOOK_COOLDOWN = 30;
+export const LOOK_COOLDOWN = 30;               // default; the game uses rules.driver.lookCooldown (Easy 20 / Hard 30 / Extreme 45)
 const LOOK_RADIUS = 14;
 const MAX_YAW = THREE.MathUtils.degToRad(70);
 const MAX_PITCH = THREE.MathUtils.degToRad(20);
@@ -53,6 +62,7 @@ const DEFAULTS = { eye: [0.55, 1.98, 2.5], eyePitch: -0.15, fov: 72, rvOffset: [
 // Tuned on screenshots: a touch wider and lower than the asset's rest pose feels less cramped
 // (visor + mirror take less of the frame, all three gauges clear the hands). Options override.
 const VIEW_FOV = 76, VIEW_PITCH = -0.16;
+const WHEEL_TURN = { r3: 1.9, legacy: 1.7 };   // wheel rotation (rad) at full steer; R3: ~109° so the hand-over-hand beat (>100°) shows near full lock
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const damp = (a, b, k, dt) => a + (b - a) * (1 - Math.exp(-k * dt));
@@ -62,12 +72,18 @@ const _p = new THREE.Vector3(), _p2 = new THREE.Vector3(), _q = new THREE.Quater
 const _e = new THREE.Euler(0, 0, 0, 'YXZ'), _m = new THREE.Matrix4(), _up = new THREE.Vector3(0, 1, 0);
 
 export class FirstPersonDriver {
-  constructor(view, data, { hudRoot = null, audio = null, pointerLock = true, mirrors = true, mirrorHz = 20, mirrorScale = 1, mirrorFar = 150, fov = VIEW_FOV, pitch = VIEW_PITCH } = {}) {
+  constructor(view, data, { hudRoot = null, audio = null, pointerLock = true, mirrors = true, mirrorHz = 20, mirrorScale = 1, mirrorFar = 150, fov = VIEW_FOV, pitch = VIEW_PITCH, cab = 'r3', handsVariant = null } = {}) {
     this.view = view;
     this.data = data;
     this.rules = data.rules || {};
     this.audio = audio;
-    this.opts = { pointerLock, mirrors, mirrorHz, mirrorScale, mirrorFar, fov, pitch };
+    this.opts = { pointerLock, mirrors, mirrorHz, mirrorScale, mirrorFar, fov, pitch, cab };
+    this.lookCooldown = Math.max(1, +(this.rules.driver?.lookCooldown ?? LOOK_COOLDOWN) || LOOK_COOLDOWN);
+    // hands variant: explicit (setHandsVariant) or automatic from the garage's Suit up step
+    this._variantManual = handsVariant === 0 || handsVariant === 1;
+    this._variant = handsVariant === 1 ? 1 : 0;
+    this._sawGarage = false; this._garageSuited = null;
+    this._prevZ = null; this._prevPhase = null;
     this.wanted = false;
     this.owning = false;
     this.built = false;
@@ -103,7 +119,15 @@ export class FirstPersonDriver {
   _build() {
     const view = this.view;
     if (!view.rvAnchor) throw new Error('view.rvAnchor missing');
-    const cab = createModel('rv_cab_fp');
+    let cab = null, r3 = false;
+    if (this.opts.cab !== 'legacy') {
+      try { cab = createModel(R3_KIND, this._variant); } catch (e) { cab = null; }
+      r3 = !!(cab && cab.getObjectByName('rv_frame') && cab.getObjectByName('wheel_mount'));
+      if (!r3) { console.warn('[fp] ' + R3_KIND + ' unavailable, using rv_cab_fp'); cab = null; }
+    }
+    if (!cab) cab = createModel('rv_cab_fp');
+    this.cabKind = r3 ? R3_KIND : 'rv_cab_fp';
+    this.r3 = r3;
     const ud = cab.userData || {};
     this.ud = { ...DEFAULTS, ...ud };
     if (this.opts.fov != null) this.ud.fov = this.opts.fov;
@@ -122,8 +146,13 @@ export class FirstPersonDriver {
       wiperMountL: g('wiper_l_mount'), wiperMountR: g('wiper_r_mount'),
     };
     this.eye = new THREE.Vector3(...this.ud.eye);
-    this.interior = new CabInterior(cab);
-    this.arms = new CabArms(this.frame, { mount: g('wheel_mount'), rimRadius: RIM_R });
+    if (r3) {
+      this.rig = new CabR3(cab, { audio: this.audio, maxHp: this.rules.rv?.maxHp ?? 100, variant: this._variant });
+      this.interior = null; this.arms = null;
+    } else {
+      this.interior = new CabInterior(cab);
+      this.arms = new CabArms(this.frame, { mount: g('wheel_mount'), rimRadius: RIM_R });
+    }
     this._armEye = new THREE.Vector3();
     const rvSize = view.rv?.size || {};
     this.mirrors = this.opts.mirrors ? new Mirrors(cab, { rvLength: rvSize.l || 8.6, rvHeight: rvSize.h || 3.4, hz: this.opts.mirrorHz, scale: this.opts.mirrorScale, far: this.opts.mirrorFar }) : null;
@@ -140,7 +169,32 @@ export class FirstPersonDriver {
   }
   get active() { return this.owning; }
   get mode() { return !this.owning ? 'off' : this.look.blend > 0.01 ? 'look' : 'fp'; }
-  get cooldown() { return clamp(this.look.cd / LOOK_COOLDOWN, 0, 1); }
+  get cooldown() { return clamp(this.look.cd / this.lookCooldown, 0, 1); }
+  get handsVariant() { return this._variant; }
+
+  /** R3 hands: 0 = blue nitrile gloves + yellow suit cuffs, 1 = bare hands + red hoodie cuffs; null = automatic (garage Suit up). */
+  setHandsVariant(v) {
+    if (v == null) { this._variantManual = false; if (this.snap) this._autoVariant(this.snap); return; }
+    this._variantManual = true;
+    this._applyVariant(v === 1 ? 1 : 0);
+  }
+  _applyVariant(v) {
+    if (v === this._variant) return;
+    this._variant = v;
+    if (this.rig) this.rig.setVariant(v);
+  }
+  /** Garage rule: gloves (0) unless Rook finished the garage unsuited; the tutorial skipped or no garage → 0. */
+  _autoVariant(snap) {
+    if (this._variantManual) return;
+    const gr = snap.garage;
+    if (gr && typeof gr === 'object') {
+      this._sawGarage = true;
+      const suited = gr.rook && gr.rook.suited;
+      if (gr.skipped) this._garageSuited = true;
+      else if (typeof suited === 'boolean') this._garageSuited = suited;
+    }
+    this._applyVariant(this._sawGarage && this._garageSuited === false ? 1 : 0);
+  }
   get gear() { return this.gearbox.gear; }
   get rpm() { return this.gearbox.rpm; }
   get throttle() { return this.gearbox.throttle; }
@@ -150,7 +204,7 @@ export class FirstPersonDriver {
   lookAround() {
     if (!this.owning || this.look.cd > 0 || this.look.t >= 0) return false;
     this.look.t = 0;
-    this.look.cd = LOOK_COOLDOWN;
+    this.look.cd = this.lookCooldown;
     this.look.swing = 0; this.look.tSwing = 0;
     if (typeof document !== 'undefined' && document.pointerLockElement) { /* keep the lock: deltas swing the orbit */ }
     return true;
@@ -217,6 +271,11 @@ export class FirstPersonDriver {
       airborne: !!rv.airborne, nitro: (rv.nitro || 0) > 0, engine, braking: !!(input && input.throttle < -0.1),
     });
     if (this.audio && this.audio.setDriveState) this.audio.setDriveState(this.driveState);
+    this._autoVariant(snap);
+    // trinkets: settle instantly after a teleport (reset / tests) or when the garage ends
+    if (this.rig && ((this._prevZ != null && Math.abs((rv.z || 0) - this._prevZ) > 40) || (this._prevPhase === 'garage' && snap.phase !== 'garage'))) this.rig.resetTrinkets();
+    this._prevZ = rv.z || 0; this._prevPhase = snap.phase;
+    this._input = input;
     this._sync();
     // look-around timing + cooldown
     const L = this.look;
@@ -270,7 +329,7 @@ export class FirstPersonDriver {
     cam.near = NEAR; cam.updateProjectionMatrix();
     cam.layers.disable(RV_LAYER);
     this.cab.visible = true;
-    if (this.interior && !this._bulbDone) { this._bulbDone = true; this.interior.bulbCheck(); }   // key-on lamp test, once
+    if (!this._bulbDone) { this._bulbDone = true; if (this.interior) this.interior.bulbCheck(); if (this.rig) this.rig.bulbCheck(); }   // key-on lamp test, once
   }
   _release(stolen = false) {
     const v = this.view, cam = v.camera;
@@ -329,11 +388,19 @@ export class FirstPersonDriver {
     if (P.speed) P.speed.rotation.z = V.speed + bumpJ;
     if (P.rpm) P.rpm.rotation.z = V.rpm + bumpJ * 0.5;
     if (P.temp) P.temp.rotation.z = V.temp;
-    // steering wheel (+ = right), kicking a little on bumps; Rook's arms grip it (cabArms.js)
-    V.wheel = damp(V.wheel, clamp((rv.steer || 0) * 1.7, -2.2, 2.2), 14, dt);
+    // steering wheel (+ = right), kicking a little on bumps; Rook's hands grip it (cabR3.js / legacy cabArms.js)
+    V.wheel = damp(V.wheel, clamp((rv.steer || 0) * (this.r3 ? WHEEL_TURN.r3 : WHEEL_TURN.legacy), -2.2, 2.2), 14, dt);
     const wheelNow = V.wheel + bumpJ * 0.7;
     if (P.wheel) P.wheel.rotation.z = wheelNow;
-    if (this.owning) {
+    if (this.rig) {
+      const inp = this._input;
+      this.rig.update(dt, {
+        snap, wheel: wheelNow, gear: this.gearbox.gear, running: this.gearbox.running,
+        engine: snap.phase === 'garage' ? (snap.garage?.items?.engine || 'off') : 'on',
+        horn: !!(rv.horn || (inp && inp.horn)), wipers: this._wipersWanted(snap), tempT: this.tempT,
+        visible: this.owning && this.look.blend < 0.98,
+      });
+    } else if (this.owning) {
       const H = this.head;
       this.arms.update(dt, {
         wheel: wheelNow, eye: this._armEye.set(this.eye.x + H.lean, this.eye.y + this.bob, this.eye.z),
@@ -342,13 +409,16 @@ export class FirstPersonDriver {
       this.interior.update(dt, { snap, gear: this.gearbox.gear, light: this._light(snap), running: this.gearbox.running });
     }
     // wipers: run on windscreen fog or in the dust storm; finish the stroke and park when done
-    const fx = snap.fx || {};
-    const want = (fx.fog || 0) > 0.1 || snap.weather === 'dust' || !!this.forceWipers;
+    const want = this._wipersWanted(snap);
     V.wiperPrev = V.wiperA;
     if (want || V.wiperPhase > 0) {
       const period = 1.15;
+      if (V.wiperPhase === 0 && this.owning && this.audio && this.audio.play) this.audio.play('wipe', 0.8);    // stroke starts
       V.wiperPhase += dt / period;
-      if (V.wiperPhase >= 1) V.wiperPhase = want ? V.wiperPhase - 1 : 0;
+      if (V.wiperPhase >= 1) {
+        V.wiperPhase = want ? V.wiperPhase - 1 : 0;
+        if (want && this.owning && this.audio && this.audio.play) this.audio.play('wipe', 0.8);
+      }
       const p = V.wiperPhase;
       V.wiperA = p < 0.44 ? 1.75 * smooth(p / 0.44) : p < 0.88 ? 1.75 * smooth(1 - (p - 0.44) / 0.44) : 0;
       if (!want && p === 0) V.wiperA = 0;
@@ -361,9 +431,21 @@ export class FirstPersonDriver {
     ];
   }
 
-  // ── events → shakes ─────────────────────────────────────────────────────
+  _wipersWanted(snap) {
+    const fx = snap.fx || {};
+    return (fx.fog || 0) > 0.1 || snap.weather === 'dust' || !!this.forceWipers;
+  }
+
+  // ── events → shakes, dash lamps, trinket kicks ──────────────────────────
   _onEvent(ev) {
-    if (!ev || !this.owning) return;
+    if (!ev) return;
+    if (this.rig) {
+      if (ev.type === EV.GADGET && ev.gadget === 'oil') this.rig.flashOil(3);
+      else if (ev.type === EV.CRASH) this.rig.kick(0.5 + Math.min(1, ev.power ?? 0.6) * 0.6);
+      else if (ev.type === EV.LANDED) this.rig.kick(ev.hard ? 1.2 : 0.6);
+      else if (ev.type === EV.COP_WRECK || ev.type === EV.PED_HIT) this.rig.kick(0.4);
+    }
+    if (!this.owning) return;
     switch (ev.type) {
       case EV.CRASH: this.shake(0.35 + Math.min(1.5, ev.power ?? 0.6) * 0.6); break;
       case EV.PED_HIT: this.shake(0.22); break;
@@ -461,6 +543,7 @@ export class FirstPersonDriver {
     if (this.fog) this.fog.dispose();
     if (this.arms) this.arms.dispose();
     if (this.interior) this.interior.dispose();
+    if (this.rig) this.rig.dispose();
     if (this.overlay) this.overlay.destroy();
     if (this.cab) this.cab.removeFromParent();
   }

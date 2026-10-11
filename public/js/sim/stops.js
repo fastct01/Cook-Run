@@ -1,15 +1,25 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // StopSystem: supply stops (route.stops) — the two-player stop flow — + the sell point.
 //
-//   (drive in) → parked → shopping → returning → loading → done
+// Round 3 (ROUND3_CONTRACT.md §Stop flow): DOC does the shop run in first person; Rook stays
+// with the RV (and defends it from the roof — sim/roof.js).
+//   parked ─0.6 s→ shopping ──shopEnter──▶ (doc 'out') ──shopDone / shopAbort / 90 s──▶
+//   returning (doc 'back', 2 s) → loading → done
 //    • parked:    RV inside the lot rectangle (track.stopLot) at |speed| < maxLoadSpeed
-//                 → 'stopParked' {id}. Driving off (out of the lot / faster) cancels.
-//    • shopping:  0.6 s later Rook leaves the seat: driving input is ignored (holdsRv()).
-//                 The driver client runs the ShopChallenge for `shopType` and sends
-//                 DCMD shopDone {stopId, score} or shopAbort {stopId}; after
+//                 → 'stopParked' {id} + the police response (cops.dispatchToStop: rules.stops.
+//                 response — heat to ≥ 1★, N cars after `delay` s, EV.STOP_COPS + toast).
+//                 Driving off (out of the lot / faster) cancels.
+//    • shopping, doc 'in': the RV is NOT held — the driver may still drive off; leaving the lot
+//                 cancels the stop (unlooted, can be retried). The 90 s limit already counts.
+//    • shopEnter (CMD from the cook through sim.applyCookCommand; DCMD 'shopEnter' for solo):
+//                 doc 'out', EV.DOC_OUT {stopId, out: true}; holdsRv() until loading (Doc must
+//                 get back in). shopDone also counts as shopEnter if it was never sent.
+//                 The shop runs on Doc's computer and reports CMD shopDone {stopId, score} or
+//                 shopAbort {stopId} (DCMD shopDone/shopAbort stay for solo + bots); after
 //                 rules.stops.shopMaxSeconds (90) it times out as an abort.
 //                 → 'shopResult' {id, score, ok}
-//    • returning: rules.stops.returnSeconds (2) — Rook runs back (input still ignored).
+//    • returning: rules.stops.returnSeconds (2) — Doc runs back (RV held; skipped if Doc never
+//                 got out), then EV.DOC_OUT {out: false}.
 //    • loading:   def.loadTime s at |speed| < maxLoadSpeed; pauses while an active cop
 //                 (state 1: soaked/stalled/blind/wrecked cops don't count) is within
 //                 rules.stops.copBlockRadius. Leaving the lot abandons the stop unlooted.
@@ -25,7 +35,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { clamp } from './util.js';
 
-const HOLD_STATES = new Set(['shopping', 'returning']);
 
 export class StopSystem {
   constructor(sim) {
@@ -56,7 +65,12 @@ export class StopSystem {
   }
 
   lootedCount() { return this.stops.filter((s) => s.looted).length; }
-  holdsRv() { return !!this.active && HOLD_STATES.has(this.active.state); }
+  // the RV is held while Doc is out of it (shopping after shopEnter, running back)
+  holdsRv() {
+    const a = this.active;
+    if (!a) return false;
+    return (a.state === 'shopping' && a.doc === 'out') || (a.state === 'returning' && a.doc === 'back');
+  }
   state() { return this.active ? this.active.state : null; }
 
   _copNear(R) {
@@ -85,9 +99,11 @@ export class StopSystem {
     let a = this.active;
     if (!a) {
       if (lot && !lot.looted && !lot.closed && speed < C.maxLoadSpeed) {
-        a = this.active = { st: lot, state: 'parked', t: 0, shopT: 0, loadT: 0, score: 0, ok: false, blocked: false, copDist: 999, bonus: false };
+        a = this.active = { st: lot, state: 'parked', t: 0, shopT: 0, loadT: 0, score: 0, ok: false, blocked: false, copDist: 999, bonus: false, doc: 'in' };
         this.current = lot;
         sim.emit({ type: 'stopParked', id: lot.def.id, name: lot.def.name, shopType: lot.shopType });
+        // someone calls it in: a police response heads for the stop
+        try { sim.cops.dispatchToStop(lot.def.id); } catch (e) { console.error('[sim] stop response failed:', e); }
       } else { this.current = null; return; }
     }
     const st = a.st;
@@ -99,15 +115,23 @@ export class StopSystem {
         if (!this._inLot(st, rv.x, rv.z, 0.5) || speed > C.maxLoadSpeed + 0.5) { this._cancel(); return; }
         if (a.t >= (S.parkSeconds ?? 0.6)) {
           a.state = 'shopping'; a.t = 0;
-          sim.emit({ type: 'msg', text: `Rook runs into ${st.def.name}.`, tone: 'info' });
+          sim.emit({ type: 'msg', text: `Shop run at ${st.def.name} — Doc, out the side door!`, tone: 'info' });
         }
         break;
       case 'shopping':
+        // Doc still inside: the RV isn't held — driving out of the lot calls the stop off (retryable)
+        if (a.doc === 'in' && !this._inLot(st, rv.x, rv.z, 2)) {
+          sim.emit({ type: 'msg', text: `Drove off before Doc got out — no supplies from ${st.def.name}.`, tone: 'bad' });
+          this._cancel();
+          return;
+        }
         a.shopT += dt;
         if (a.shopT >= (S.shopMaxSeconds ?? 90)) { this._result(false, 0, 'timeout'); }
         break;
       case 'returning':
-        if (a.t >= (S.returnSeconds ?? 2)) {
+        // Doc runs back (2 s); if he never got out there's nothing to wait for
+        if (a.doc !== 'back' || a.t >= (S.returnSeconds ?? 2)) {
+          if (a.doc === 'back') { a.doc = 'in'; sim.emit({ type: 'docOut', stopId: st.def.id, out: false }); }
           if (a.ok) { a.state = 'loading'; a.t = 0; }
           else this._finish(false);
         }
@@ -133,7 +157,11 @@ export class StopSystem {
     }
   }
 
-  _cancel() { this.active = null; this.current = null; }
+  _cancel() {
+    const a = this.active;
+    if (a) { try { this.sim.cops.cancelResponse(a.st.def.id); } catch (e) { /* ignore */ } }
+    this.active = null; this.current = null;
+  }
 
   // shop finished (DCMD shopDone / shopAbort / timeout)
   _result(ok, score, why = '') {
@@ -141,15 +169,29 @@ export class StopSystem {
     if (!a) return false;
     a.ok = ok; a.score = ok ? clamp(+score || 0, 0, 1) : 0;
     a.state = 'returning'; a.t = 0;
+    if (a.doc === 'out') a.doc = 'back';
     sim.emit({ type: 'shopResult', id: a.st.def.id, score: a.score, ok, reason: why || undefined });
-    if (!ok) sim.emit({ type: 'msg', text: why === 'timeout' ? 'Rook took too long and comes back empty-handed.' : 'Rook comes back empty-handed.', tone: 'bad' });
+    if (!ok) sim.emit({ type: 'msg', text: a.doc !== 'back' ? 'Doc never made it out — no supplies.' : why === 'timeout' ? 'Doc took too long and comes back empty-handed.' : 'Doc comes back empty-handed.', tone: 'bad' });
+    return true;
+  }
+
+  // Doc jumped out of the side door (CMD.shopEnter from the cook; DCMD 'shopEnter' in solo)
+  shopEnter(stopId) {
+    const a = this.active, sim = this.sim;
+    if (!a || (a.state !== 'shopping' && a.state !== 'parked')) return false;
+    if (stopId != null && stopId !== a.st.def.id) return false;
+    if (a.doc !== 'in') return true;   // already out
+    if (a.state === 'parked') { a.state = 'shopping'; a.t = 0; }
+    a.doc = 'out';
+    sim.emit({ type: 'docOut', stopId: a.st.def.id, out: true });
     return true;
   }
 
   shopDone(stopId, score) {
     const a = this.active;
-    if (!a || a.state !== 'shopping') return false;
+    if (!a || (a.state !== 'shopping' && a.state !== 'parked')) return false;
     if (stopId != null && stopId !== a.st.def.id) return false;
+    if (a.doc === 'in') this.shopEnter(stopId);   // shopDone implies shopEnter
     return this._result(true, score);
   }
 
@@ -190,11 +232,14 @@ export class StopSystem {
     const a = this.active;
     if (!a) return null;
     const st = a.st, def = st.def, sim = this.sim;
+    const ds = sim.labLink?.shop;
+    const docShop = ds && (a.state === 'shopping' || a.state === 'parked') && (ds.stopId == null || ds.stopId === def.id) ? { ...ds } : null;
     return {
       id: def.id, name: def.name, shopType: st.shopType, state: a.state,
       shopT: a.shopT, shopMax: this.S.shopMaxSeconds ?? 90, loadT: a.loadT, loadTime: def.loadTime,
       progress: def.loadTime > 0 ? a.loadT / def.loadTime : 1, blocked: a.state === 'loading' && a.blocked,
       copDist: Math.min(999, a.copDist), score: a.score, ok: a.ok, bonus: a.bonus, side: def.side,
+      doc: a.doc, docShop, held: this.holdsRv(),
       roof: sim._roofState(),
     };
   }

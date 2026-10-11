@@ -18,6 +18,13 @@
 //      disabled cops don't block, abort, drive-off, alarm, nearStop banner range
 //   j) hazards apply their effects (+ placement rules)
 //   k) helper API smoke test; car-wash fallback; rail-crossing zone; reset placement
+//   l) Round 3: withDifficulty levers · snapshot/EndResult difficulty · bust grace per difficulty ·
+//      regen on all three bars · cop effects (holes/crack/tyre 9/radiator 10/duck) + copFx ·
+//      return fire only while Rook is up · chase fire only from chaseStars · stop response cops ·
+//      DCMD roof routing + the cook's old roof commands ignored
+//   m) full 40 km bot runs on Easy and Extreme (Hard = a): Easy wins, Extreme ends and is clearly
+//      harder (more damage taken / busted). --diffSeeds=1,2 adds seeds to the comparison.
+//   r) DEFEND's sim/test/roof-*.js (if present), each run as a child process
 // Options: --seed=N  --seeds=1,2 (extra full + cruise runs; informational)  --seeds=none (default)
 //          --only=a,b,…  --strict (extra seeds must win too)  --verbose
 // ─────────────────────────────────────────────────────────────────────────────
@@ -25,7 +32,8 @@ import { loadDataNode } from '../../data/loadData.js';
 import { GameSim } from '../GameSim.js';
 import { Autopilot } from '../autopilot.js';
 import { computeSpeedNeeded } from '../bridge.js';
-import { KIND, KIND_ID } from '../../shared/protocol.js';
+import { KIND, KIND_ID, EV } from '../../shared/protocol.js';
+import { withDifficulty, normDifficulty, difficultyInfo, DIFFICULTIES } from '../../shared/difficulty.js';
 
 const DT = 1 / 60;
 const args = Object.fromEntries(process.argv.slice(2).map((a) => { const [k, v] = a.replace(/^--/, '').split('='); return [k, v ?? true]; }));
@@ -130,6 +138,7 @@ function placeAt(sim, z, u = null) {
 }
 
 function runFull(data, seed, opts = {}) {
+  if (opts.difficulty) data = withDifficulty(data, opts.difficulty);
   const sim = new GameSim(data, { seed, solo: opts.solo ?? true });
   const ap = new Autopilot(data, { seed, sim, onDriverCommand: (c) => sim.applyDriverCommand(c) });
   const cook = new FakeCook(data, opts.cook);
@@ -263,7 +272,8 @@ async function main() {
     check('a2 canyon jump at the new lip succeeds (jumped, landed beyond the gap, no fall)', st.jumped && st.landed && st.fell === 0, `jumped=${st.jumped} landed=${st.landed} falls=${st.fell}`);
     check('a3 cops give up after the bridge', st.copsGaveUp && A.sim.heat.gaveUp && A.sim.heat.value === 0 && st.copsAfterBridge === 0,
       `gaveUp=${st.copsGaveUp} at z=${st.gaveUpZ?.toFixed(0)} chasing after=${st.copsAfterBridge}`);
-    check('a4 run length 30–45 min sim time', A.sim.t >= 30 * 60 && A.sim.t <= 45 * 60, fmtT(A.sim.t));
+    // (Round 3: cops come to every stop and the chase runs hotter — ~43 min with the bots)
+    check('a4 run length 30–50 min sim time', A.sim.t >= 30 * 60 && A.sim.t <= 50 * 60, fmtT(A.sim.t));
     check('a5 ≥ 6 of 8 supply stops looted', A.sim.stops.lootedCount() >= 6, `${A.sim.stops.lootedCount()}`);
     check('a6 the chase happened (≥ 1 star, ≥ 1 cop)', st.maxStars >= 1 && st.cops >= 1, `maxStars=${st.maxStars} cops=${st.cops}`);
     check('a7 HP regen happened', st.regenOn >= 1 && st.regenHp > 1, `${st.regenOn}× +${st.regenHp.toFixed(1)} hp`);
@@ -494,15 +504,17 @@ async function main() {
     const ap = new Autopilot(data, { seed, sim, onDriverCommand: (c) => sim.applyDriverCommand(c) });
     let snap = sim.snapshot();
     const N = 20000;
-    const t = process.hrtime.bigint();
+    const t = process.hrtime.bigint(), cpu0 = process.cpuUsage();
     for (let i = 0; i < N; i++) { sim.step(ap.update(snap), DT); snap = sim.snapshot(); if (sim.phase === 'won' || sim.phase === 'lost') break; }
     const ms = Number(process.hrtime.bigint() - t) / 1e6;
-    const sps = (N / ms) * 1000;
+    const cpu = process.cpuUsage(cpu0), cpuMs = (cpu.user + cpu.system) / 1000;
+    // CPU time, not wall time: a busy machine (other test runs, browsers) must not fail this check
+    const sps = (N / Math.max(1, cpuMs)) * 1000, wallSps = (N / ms) * 1000;
     const sim2 = new GameSim(data, { seed, solo: true }); toDrive(sim2);
     const t2 = process.hrtime.bigint();
     for (let i = 0; i < N; i++) sim2.step({ throttle: 1, steer: Math.sin(i / 90) * 0.3 }, DT);
     const ms2 = Number(process.hrtime.bigint() - t2) / 1e6;
-    console.log(`  step+snapshot+autopilot: ${sps.toFixed(0)} steps/s (${(ms / N * 1000).toFixed(1)} µs/step); step only: ${(N / ms2 * 1000).toFixed(0)} steps/s`);
+    console.log(`  step+snapshot+autopilot: ${sps.toFixed(0)} steps per CPU-second (${(cpuMs / N * 1000).toFixed(1)} µs/step; wall ${wallSps.toFixed(0)}/s); step only: ${(N / ms2 * 1000).toFixed(0)} steps/s wall`);
     check('f1 ≫ 60 steps/s (≥ 3000)', sps >= 3000, `${sps.toFixed(0)}`);
   }
 
@@ -633,6 +645,7 @@ async function main() {
       const st = sim.stops.stops[0];
       sim.rv.z = st.lot.cz; sim.rv.x = st.lot.cx; sim.rv.yaw = sim.road.heading(st.lot.cz); sim.rv.vx = sim.rv.vz = 0; sim.rv.speed = 0;
       sim.traffic.cars = []; sim.cops.clearAll(); sim.cops.patrols.forEach((p) => { p.spawned = true; });
+      sim.cops.dispatchToStop = () => null;   // no police response in the stop-flow tests (section l covers it)
       return sim;
     };
     const hold = { throttle: 0, steer: 0, handbrake: true };
@@ -658,15 +671,32 @@ async function main() {
       console.log(`  states ${states.join(' > ')} · events ${evs.join(',')} · gained ${JSON.stringify(gained)} · snapshot.stop ${JSON.stringify(snapStop).slice(0, 220)}`);
       check('i1 the stop runs parked → shopping → returning → loading → done', states.join('>') === 'parked>shopping>returning>loading>done' && evs.includes('stopParked') && evs.includes('shopResult') && evs.includes('stopDone'));
       check('i2 score ≥ bonusScore → +1 of the first item; looted', sim.stops.stops[0].looted && gained[first] === def.gives[first] + 1);
-      check('i3 snapshot.stop has the contract fields incl. roof', snapStop && ['id', 'name', 'shopType', 'state', 'shopT', 'loadT', 'progress', 'blocked', 'copDist', 'roof'].every((k) => k in snapStop) && snapStop.roof && 'ammo' in snapStop.roof);
+      check('i3 snapshot.stop has the contract fields incl. doc, docShop and roof', snapStop && ['id', 'name', 'shopType', 'state', 'shopT', 'loadT', 'progress', 'blocked', 'copDist', 'roof', 'doc', 'docShop'].every((k) => k in snapStop) && snapStop.roof && 'available' in snapStop.roof);
     }
     {
-      // RV held still while shopping
+      // RV held still once Doc is out (CMD.shopEnter from the cook)
       const sim = mk();
       for (let i = 0; i < 60; i++) sim.step(hold, DT);
+      const docIn = sim.snapshot().stop?.doc;
+      sim.applyCookCommand({ type: 'shopEnter', stopId: def.id });
+      const evOut = sim.snapshot().events.find((e) => e.type === 'docOut');
       const p = { x: sim.rv.x, z: sim.rv.z };
       for (let i = 0; i < 120; i++) sim.step({ throttle: 1, steer: 0.5 }, DT);
-      check('i4 driving input is ignored while Rook is in the shop', sim.stops.state() === 'shopping' && Math.hypot(sim.rv.x - p.x, sim.rv.z - p.z) < 0.05);
+      const s1 = sim.snapshot().stop;
+      check('i4 shopEnter → doc out, EV.DOC_OUT, driving input ignored while Doc is out', docIn === 'in' && evOut && evOut.out === true && sim.stops.state() === 'shopping' && s1.doc === 'out' && s1.held && Math.hypot(sim.rv.x - p.x, sim.rv.z - p.z) < 0.05);
+      // LabState.shop → stop.docShop
+      sim.setLabState({ cooking: false, shop: { stopId: def.id, label: 'Grab 2/3', frac: 0.66, tLeft: 21 } });
+      const ds = sim.snapshot().stop.docShop;
+      check('i4b LabState.shop → snapshot stop.docShop', ds && ds.label === 'Grab 2/3' && Math.abs(ds.frac - 0.66) < 1e-9 && ds.tLeft === 21, JSON.stringify(ds));
+    }
+    {
+      // Doc still inside: not held; driving out of the lot cancels the stop (not closed, can retry)
+      const sim = mk();
+      for (let i = 0; i < 60; i++) sim.step(hold, DT);
+      const st0 = sim.stops.state();
+      for (let i = 0; i < 60 * 4; i++) sim.step({ throttle: 1, steer: 0 }, DT);
+      const st = sim.stops.stops[0];
+      check('i4c doc still inside: the RV may drive off — the stop is cancelled, unlooted and retryable', st0 === 'shopping' && !sim.stops.active && !st.looted && !st.closed, `state before ${st0}, active=${sim.stops.state()}, looted=${st.looted}, closed=${st.closed}`);
     }
     {
       // cop blocking loading; a soaked cop doesn't block
@@ -906,6 +936,309 @@ async function main() {
     for (let k = 0; k < 4; k++) { s4.rv.resetCd = 0; const z0 = s4.rv.z; s4.step({ throttle: 0, steer: 0, reset: true }, DT); hops.push(+(s4.rv.z - z0).toFixed(1)); }
     console.log(`  reset from the rails → nearest rail ${onRails.map((d) => d.toFixed(1)).join(' / ')} m · repeated resets hop ${hops.join(', ')} m`);
     check('k4 resets: never within 4 m (body) of a rail line; repeats at one spot hop forward', onRails.every((d) => d >= s4.rv.len / 2 + 4) && hops[1] >= 12 && hops[2] >= 12, `min ${Math.min(...onRails).toFixed(1)} m`);
+  }
+
+
+  // ── l) Round 3 ──────────────────────────────────────────────────────────────
+  if (run('l')) {
+    hr('l) Round 3: difficulty · bust grace · regen · cop effects · cops fire back · stop response');
+    const raw = data;
+    const before = JSON.stringify(raw);
+    const D = Object.fromEntries(DIFFICULTIES.map((l) => [l, withDifficulty(raw, l)]));
+    {
+      const get = (o, p) => p.split('.').reduce((a, k) => (a == null ? a : a[k]), o);
+      const expect = [
+        // [path in rules (or route.…), easy, hard, extreme]
+        ['heat.copRamDamage', 4, 6, 9], ['heat.suvRamDamage', 6, 10, 15],
+        ['heat.levels.3.copTopSpeed', 30, 32, 34], ['heat.levels.1.maxCops', 1, 1, 2], ['heat.levels.3.maxCops', 2, 3, 4],
+        ['heat.levels.2.spawnEvery', 9.1, 7, 5.25], ['heat.sources.pedHit', 0.315, 0.45, 0.585],
+        ['heat.decayDelay', 5, 7, 10], ['heat.decayPerSec', 0.08, 0.05, 0.03],
+        ['heat.levels.4.rhino', false, undefined, true], ['heat.levels.5.rhino', false, true, true],
+        ['defend.copFire.chaseStars', 5, undefined, 3], ['heat.bust.grace', 5, 3, 1.5], ['heat.bust.seconds', 6, 4, 2.5],
+        ['rv.regenPerSec', 0.45, 0.3, 0.15], ['rv.regenDelay', 6, 10, 15], ['rv.crashDamagePerMps', 0.385, 0.55, 0.715],
+        ['cook.hurtMult', 0.6, 1, 1.5], ['cook.zoneScale', 1.3, 1, 0.7], ['cook.burnerFireMult', 0.6, 1, 1.5], ['cook.spillMult', 0.35, 1, 1.8],
+        ['sim.obstacles.densityMult', 0.7, 1, 1.3], ['sim.traffic.densityMult', 0.8, 1, 1.2], ['shops.timeMult', 1.25, 1, 0.75],
+        ['defend.hitsMult', 0.75, undefined, 1.5], ['defend.ammoMult', 1.5, undefined, 0.7], ['defend.flare', undefined, undefined, 0],
+        ['driver.lookCooldown', 20, 30, 45], ['route.sellPoint.requiredUnits', 4, 6, 8],
+        ['sim.startGadgets.smoke', 2, 1, 0], ['sim.startGadgets.nitro', 1, 0, 0],
+        ['bridge.missDamage', 20, 30, 50], ['bridge.missBags', 1, 1, 2], ['scoring.mult', 0.75, 1, 1.5],
+        ['stops.response.cops', 1, 2, 3], ['stops.response.delay', 12, 8, 5],
+      ];
+      const bad = [];
+      for (const [path, ...want] of expect) {
+        DIFFICULTIES.forEach((l, i) => {
+          const root = path.startsWith('route.') ? D[l].route : D[l].rules;
+          const v = get(root, path.replace(/^route\./, ''));
+          const w = want[i];
+          if (w === undefined) return;   // Hard value lives in DEFEND's block (or isn't a lever there)
+          const ok = typeof w === 'number' ? Math.abs(v - w) < 1e-6 : v === w;
+          if (!ok) bad.push(`${l}:${path}=${v} (want ${w})`);
+        });
+      }
+      // Hard return fire / chase numbers scaled for Easy / Extreme (relative to Hard, or the contract defaults)
+      const cf = (l) => D[l].rules.defend?.copFire || {};
+      const hf = { returnEvery: 2.4, returnDamage: 2, chaseEvery: 6, chaseDamage: 1.5, ...(raw.rules.defend?.copFire || {}) };
+      if (Math.abs(cf('easy').returnEvery - hf.returnEvery * 2.5) > 1e-6 || Math.abs(cf('extreme').returnDamage - hf.returnDamage * 1.5) > 1e-6) bad.push(`copFire easy ${JSON.stringify(cf('easy'))} extreme ${JSON.stringify(cf('extreme'))}`);
+      check('l1 withDifficulty: every lever of the table on Easy / Hard / Extreme', !bad.length, bad.length ? bad.slice(0, 6).join('; ') : `${expect.length} levers × 3 levels`);
+      const hardSame = JSON.stringify(D.hard.rules) === JSON.stringify(raw.rules) && JSON.stringify(D.hard.route) === JSON.stringify(raw.route);
+      const again = withDifficulty(D.extreme, 'extreme');
+      check('l2 withDifficulty: Hard = the rules as written; input never mutated; new objects; re-applying starts from the originals', hardSame && JSON.stringify(raw) === before && D.hard.rules !== raw.rules && D.easy.route !== raw.route && D.extreme.difficulty === 'extreme'
+        && JSON.stringify(again.rules) === JSON.stringify(D.extreme.rules) && normDifficulty('EXTREME') === 'extreme' && normDifficulty('nope') === 'hard' && normDifficulty() === 'hard'
+        && difficultyInfo('easy').color === '#D9C38A' && difficultyInfo('hard').color === '#E07A3C' && difficultyInfo('extreme').color === '#E5483A');
+      // snapshot + EndResult
+      const sx = new GameSim(D.extreme, { seed, solo: true }); toDrive(sx);
+      sx.inv.units = 9; sx.inv.value = 9000; sx.inv.quality = 0.8; sx.score.points = 1000;
+      const snapD = sx.snapshot().difficulty;
+      sx.win();
+      const rx = sx.result;
+      const sh = new GameSim(D.hard, { seed, solo: true }); toDrive(sh);
+      sh.inv.units = 9; sh.inv.value = 9000; sh.inv.quality = 0.8; sh.score.points = 1000; sh.driveTime = sx.driveTime; sh.win();
+      const rh = sh.result;
+      const raw0 = new GameSim(raw, { seed, solo: true });
+      check('l3 snapshot.difficulty; EndResult { difficulty, scoreMult } with points × mult; raw data → hard', snapD === 'extreme' && rx.difficulty === 'extreme' && rx.scoreMult === 1.5 && rh.scoreMult === 1 && rh.difficulty === 'hard'
+        && Math.abs(rx.points - Math.round(rh.points * 1.5)) <= 1 && raw0.snapshot().difficulty === 'hard', `extreme ${rx.points} pts vs hard ${rh.points}`);
+      // start gadgets / bags needed / bridge miss
+      const se = new GameSim(D.easy, { seed, solo: true }), sxx = new GameSim(D.extreme, { seed, solo: true });
+      check('l4 start gadgets + bags needed per difficulty', se.inv.gadgets.smoke === 2 && se.inv.gadgets.nitro === 1 && sxx.inv.gadgets.smoke === 0 && se.route.sellPoint.requiredUnits === 4 && sxx.route.sellPoint.requiredUnits === 8);
+    }
+    // ── bust grace on every difficulty: a running cop parked beside the stopped RV
+    {
+      const res = [];
+      for (const l of DIFFICULTIES) {
+        const sim = new GameSim(D[l], { seed, solo: false });
+        toDrive(sim); placeAt(sim, 600, sim.road.laneU(600, 1, 0));
+        sim.cops.clearAll(); sim.cops.noMoreSpawns = true; sim.traffic.cars = [];
+        sim.heat.set(2.2);
+        const c = sim.cops._makeCop('cop', sim.rv.x, sim.rv.z, sim.rv.yaw, 0); sim.cops.cops.push(c);
+        const B = sim.rules.heat.bust;
+        let firstBust = null, lostT = null, graceSeen = [];
+        const t0 = sim.t;
+        for (let i = 0; i < 60 * 20; i++) {
+          const rx = -Math.cos(sim.rv.yaw), rz = Math.sin(sim.rv.yaw);
+          c.x = sim.rv.x + rx * 3.4; c.z = sim.rv.z + rz * 3.4; c.vx = c.vz = 0; c.speed = 0; c.state = 1;
+          sim.step({ throttle: 0, steer: 0, handbrake: true }, DT);
+          const sn = sim.snapshot();
+          if (i % 30 === 0) graceSeen.push(sn.bustInfo.grace);
+          if (firstBust == null && sn.bust > 0) firstBust = sim.t - t0;
+          if (sim.phase === 'lost') { lostT = sim.t - t0; break; }
+        }
+        res.push({ l, firstBust, lostT, grace: B.grace, secs: B.seconds, reason: sim.lostReason, graceDown: graceSeen[0] > graceSeen[2] });
+      }
+      console.log('  ' + res.map((r) => `${r.l}: grace ${r.grace} s → meter from ${r.firstBust?.toFixed(2)} s, busted at ${r.lostT?.toFixed(2)} s (grace + ${r.secs} s)`).join(' · '));
+      check('l5 stopping with stars never busts inside the grace; then busted after grace + bust.seconds (each difficulty)', res.every((r) => r.firstBust != null && r.firstBust >= r.grace - 0.02 && r.reason === 'busted' && Math.abs(r.lostT - (r.grace + r.secs)) < 0.15 && r.graceDown));
+      // moving faster than maxRvSpeed resets the stopped clock
+      const sim = new GameSim(D.hard, { seed, solo: false });
+      toDrive(sim); placeAt(sim, 600, sim.road.laneU(600, 1, 0)); sim.cops.clearAll(); sim.cops.noMoreSpawns = true;
+      for (let i = 0; i < 120; i++) sim.step({ throttle: 0, handbrake: true }, DT);
+      const st1 = sim.rv.stopped;
+      for (let i = 0; i < 120 && Math.abs(sim.rv.speed) < 5; i++) sim.step({ throttle: 1 }, DT);
+      check('l6 rv.stopped counts while |speed| < 4 and resets when faster; bustInfo armed after the grace', st1 > 1.9 && sim.rv.stopped === 0 && sim.snapshot().bustInfo.armed === false && typeof sim.snapshot().rv.stopped === 'number', `stopped ${st1.toFixed(2)} → ${sim.rv.stopped}`);
+    }
+    // ── regen on all three bars, each with its own timer, never from 0
+    {
+      const sim = new GameSim(D.hard, { seed, solo: true });
+      toDrive(sim); placeAt(sim, 16200); sim.cops.clearAll(); sim.cops.noMoreSpawns = true; sim.traffic.cars = []; sim.peds.peds = [];
+      const R = sim.rules.rv, hold = { throttle: 0, handbrake: true };
+      const evs = [];
+      const stepS = (secs) => { for (let i = 0; i < Math.round(secs * 60); i++) { sim.step(hold, DT); for (const e of sim.snapshot().events) if (e.type === 'regen') evs.push({ ...e, t: sim.t }); } };
+      sim.damageRv(20, 'test', true);            // t0: hull
+      stepS(5); sim.hurtDriver(10);              // t0+5: Rook
+      stepS(3); sim.labLink.hurtCook(15);        // t0+8: Doc
+      stepS(1.9);                                 // t0+9.9
+      const a = { rv: sim.rv.hp, d: sim.crew.driver, c: sim.crew.cook };
+      stepS(5.2);                                  // t0+15.1: hull healing for 5.1 s, Rook from t0+15
+      const b = { rv: sim.rv.hp, d: sim.crew.driver, c: sim.crew.cook, regen: sim.snapshot().crew.regen };
+      stepS(5);                                    // t0+20.1
+      const c = { rv: sim.rv.hp, d: sim.crew.driver, c: sim.crew.cook };
+      const rate = R.regenPerSec;
+      const ok1 = a.rv === 80 && a.d === 90 && a.c === 85;
+      const ok2 = Math.abs(b.rv - (80 + rate * 5.1)) < 0.05 && Math.abs(b.d - 90) < 0.05 && b.c === 85;
+      const ok3 = Math.abs(c.d - (90 + rate * 5.1)) < 0.06 && Math.abs(c.c - (85 + rate * 2.1)) < 0.06;
+      const bars = new Set(evs.filter((e) => e.on).map((e) => e.bar));
+      console.log(`  regen ${rate}/s after ${R.regenDelay} s: hull 80→${b.rv.toFixed(2)}→${c.rv.toFixed(2)} · Rook 90→${b.d.toFixed(2)}→${c.d.toFixed(2)} · Doc 85→${b.c.toFixed(2)}→${c.c.toFixed(2)} · events on: ${[...bars].join(',')}`);
+      check('l7 regen: each bar heals regenPerSec after regenDelay s since ITS OWN last damage; EV.REGEN {on, bar}', ok1 && ok2 && ok3 && bars.has('rv') && bars.has('driver') && bars.has('cook'));
+      // never from 0: Doc knocked out stays at 0 (cookDown), then comes back at 25 and waits the delay
+      sim.labLink.hurtCook(500);
+      stepS(11);
+      const down = sim.crew.cook;
+      stepS(1.2);
+      const back = sim.crew.cook;
+      stepS(5);
+      check('l8 regen never revives a bar at 0 (Doc out cold) and waits the delay after he is back', down === 0 && back === sim.cfg.lab.cookReviveHp && sim.crew.cook === back, `down ${down} → back ${back} → ${sim.crew.cook}`);
+      // per difficulty rate
+      const rates = DIFFICULTIES.map((l) => { const s2 = new GameSim(D[l], { seed, solo: true }); toDrive(s2); placeAt(s2, 16200); s2.cops.clearAll(); s2.cops.noMoreSpawns = true; s2.traffic.cars = []; s2.peds.peds = [];
+        s2.damageRv(30, 'test', true); const d0 = s2.rules.rv.regenDelay; for (let i = 0; i < Math.round((d0 + 4) * 60); i++) s2.step(hold, DT); return { l, gain: s2.rv.hp - 70, want: s2.rules.rv.regenPerSec * 4 }; });
+      check('l9 regen rate / delay follow the difficulty (Easy 0.45/6 s · Hard 0.3/10 s · Extreme 0.15/15 s)', rates.every((r) => Math.abs(r.gain - r.want) < 0.05), rates.map((r) => `${r.l} +${r.gain.toFixed(2)}`).join(' '));
+    }
+    // ── cop effects: holes, crack, tyre (9), radiator (10), duck; copFx
+    {
+      const sim = new GameSim(D.hard, { seed, solo: false });
+      toDrive(sim); placeAt(sim, 16200); sim.cops.clearAll(); sim.cops.noMoreSpawns = true; sim.traffic.cars = [];
+      sim.heat.set(1.5);
+      const yaw = sim.rv.yaw, mk = (ahead, lat = 0, speed = 0) => { const c = sim.cops._makeCop('cop', sim.rv.x + Math.sin(yaw) * ahead - Math.cos(yaw) * lat, sim.rv.z + Math.cos(yaw) * ahead + Math.sin(yaw) * lat, yaw, speed); sim.cops.cops.push(c); return c; };
+      const A = mk(60, 0, 15), B = mk(90, 3, 15), C = mk(120, -3, 0), E = mk(150, 0, 0), F = mk(180, 3, 0);
+      const w0 = A.w;
+      sim.applyCopEffect(A.id, { tyre: 'fl', hole: 3 });
+      sim.applyCopEffect(B.id, { radiator: true, hole: 1 });
+      sim.applyCopEffect(C.id, { hole: 2, crack: true });
+      sim.applyCopEffect(E.id, { tyre: 'rr', radiator: true });
+      sim.applyCopEffect(F.id, { radiator: true });
+      const s0 = { A: A.state, B: B.state, C: C.state, E: E.state, duck: C.duckT };
+      sim.applyCopEffect(A.id, { stall: 30 }); sim.cops.blind(A, 5); sim.cops.spinOut(B, 3);
+      sim.applyCopEffect(F.id, { stall: 30 });
+      const fx = sim.snapshot().copFx;
+      const tup = (c) => fx.find((t) => t[0] === c.id);
+      const hold = { throttle: 0, handbrake: true };
+      for (let i = 0; i < 60 * 3; i++) sim.step(hold, DT);
+      const vA3 = Math.abs(A.speed);
+      for (let i = 0; i < 60 * 12.2; i++) sim.step(hold, DT);   // t ≈ 15.2 s
+      const sB = B.state, sF = F.state, sA15 = A.state;
+      for (let i = 0; i < 60 * 5.2; i++) sim.step(hold, DT);    // t ≈ 20.4 s
+      const sA20 = A.state;
+      console.log(`  states right after: tyre ${s0.A} radiator ${s0.B} hole+crack ${s0.C} (duck ${s0.duck.toFixed(1)} s) tyre+radiator ${s0.E} · tyre car ${w0.toFixed(2)}→ yaw rate pulled left, speed after 3 s ${vA3.toFixed(1)} · at 15.2 s radiator→${sB}, stalled-30 radiator ${sF} · tyre car at 15.2 s ${sA15}, at 20.4 s ${sA20} · copFx ${JSON.stringify(fx)}`);
+      check('l10 tyre → state 9 (slews to a stop, out ~20 s, then gives up = 5); stall/smoke/oil don\'t change it', s0.A === 9 && vA3 < 1.5 && sA15 === 9 && sA20 === 5);
+      check('l11 radiator → state 10 (stalled, steaming) for 15 s, then back to the chase; a stall only lengthens it; tyre beats radiator', s0.B === 10 && sB === 1 && sF === 10 && s0.E === 9);
+      check('l12 copFx tuples [id, holes, crack, tyreMask, steam]; a non-disabling hit makes the officers duck', tup(A) && tup(A)[1] === 3 && tup(A)[3] === 1 && tup(B)[4] === 1 && tup(C)[1] === 2 && tup(C)[2] === 1 && tup(E)[3] === 8 && tup(E)[4] === 1 && s0.C === 1 && s0.duck > 1);
+      // disabled 9/10 cars neither see, bust, block loading, nor ring the lab alert
+      const s2 = new GameSim(D.hard, { seed, solo: false });
+      toDrive(s2); placeAt(s2, 600, s2.road.laneU(600, 1, 0)); s2.cops.clearAll(); s2.cops.noMoreSpawns = true; s2.traffic.cars = [];
+      s2.heat.set(1.5);
+      const k1 = s2.cops._makeCop('cop', s2.rv.x - Math.cos(s2.rv.yaw) * 3.4, s2.rv.z + Math.sin(s2.rv.yaw) * 3.4, s2.rv.yaw, 0); s2.cops.cops.push(k1);
+      const k2 = s2.cops._makeCop('cop', s2.rv.x + Math.cos(s2.rv.yaw) * 3.4, s2.rv.z - Math.sin(s2.rv.yaw) * 3.4, s2.rv.yaw, 0); s2.cops.cops.push(k2);
+      s2.applyCopEffect(k1.id, { tyre: 'fl' }); s2.applyCopEffect(k2.id, { radiator: true });
+      let maxBust = 0, seen = false, alert = 999;
+      for (let i = 0; i < 60 * 10; i++) { s2.step({ throttle: 0, handbrake: true }, DT); const sn = s2.snapshot(); maxBust = Math.max(maxBust, sn.bust); seen = seen || sn.heat.seen; alert = Math.min(alert, sn.alert.copDist); }
+      check('l13 states 9/10 never see, bust or ring the lab alert', maxBust === 0 && !seen && alert > 100, `bust ${maxBust} seen ${seen} alert ${alert}`);
+    }
+    // ── cops fire back: return fire only while Rook is up; chase fire only from chaseStars
+    {
+      const fakeRoof = (up) => ({ active: up, roofRook: up, onRoof: up, holdsRv: up, climb: up ? 1 : 0, update() {}, command() { return false; }, state() { return { active: up, available: false, why: null, nearCop: 999 }; } });
+      const returnFire = (l, up) => {
+        const sim = new GameSim(D[l], { seed, solo: false });
+        toDrive(sim); placeAt(sim, 16200); sim.cops.clearAll(); sim.cops.noMoreSpawns = true; sim.traffic.cars = []; sim.peds.peds = [];
+        sim.roof = fakeRoof(up);
+        sim.heat.set(1.5);
+        const c = sim.cops._makeCop('cop', sim.rv.x + Math.sin(sim.rv.yaw) * 15, sim.rv.z + Math.cos(sim.rv.yaw) * 15, sim.rv.yaw + Math.PI, 0); sim.cops.cops.push(c);
+        const shots = [];
+        const hp0 = sim.rv.hp, d0 = sim.crew.driver;
+        for (let i = 0; i < 60 * 60; i++) {
+          c.x = sim.rv.x + Math.sin(sim.rv.yaw) * 15; c.z = sim.rv.z + Math.cos(sim.rv.yaw) * 15; c.vx = c.vz = 0; c.speed = 0; c.state = 1;
+          if (sim.heat.value < 1.2) sim.heat.set(1.5);   // keep the chase on (calm decay would end it after ~30 s)
+          sim.step({ throttle: 0, handbrake: true }, DT);
+          for (const e of sim.snapshot().events) if (e.type === EV.COP_SHOT) shots.push(e);
+          if (sim.phase !== 'drive') break;
+        }
+        return { shots, hits: shots.filter((e) => e.hit).length, rvDmg: sim.damageTaken.rv, rookDmg: sim.damageTaken.driver, phase: sim.phase, F: sim.cops.copFire(), dHull: hp0 - sim.rv.hp, dRook: d0 - sim.crew.driver };
+      };
+      const down = returnFire('hard', false), up = returnFire('hard', true), upE = returnFire('easy', true), upX = returnFire('extreme', true);
+      const F = up.F;
+      const e0 = up.shots[0] || {};
+      console.log(`  return fire over 60 s at a cop 15 m away: Rook down ${down.shots.length} shots · up: Easy ${upE.shots.length} (${upE.hits} hits, hull −${upE.rvDmg.toFixed(1)}) · Hard ${up.shots.length} (${up.hits} hits, hull −${up.rvDmg.toFixed(1)}, Rook −${up.rookDmg.toFixed(1)}) · Extreme ${upX.shots.length} (${upX.hits} hits, hull −${upX.rvDmg.toFixed(1)})`);
+      const expShots = 60 / F.returnEvery;
+      check('l14 return fire only while Rook is up: ~every returnEvery s, hits hull returnDamage + Rook × rookShare; EV.COP_SHOT shape', down.shots.length === 0 && up.shots.length >= expShots * 0.7 && up.shots.length <= expShots * 1.35
+        && Math.abs(up.rvDmg - up.hits * F.returnDamage) < 1e-6 && Math.abs(up.rookDmg - up.hits * F.returnDamage * F.rookShare) < 1e-6 && up.hits > 0 && up.hits < up.shots.length
+        && e0.target === 'rook' && ['copId', 'x', 'y', 'z', 'tx', 'ty', 'tz', 'hit', 'damage'].every((k) => k in e0));
+      check('l15 return fire scales with the difficulty (Easy < Hard < Extreme damage taken)', upE.rvDmg < up.rvDmg && up.rvDmg < upX.rvDmg && upE.shots.length < up.shots.length && up.shots.length < upX.shots.length);
+      const chase = (l, stars) => {
+        const sim = new GameSim(D[l], { seed, solo: false });
+        toDrive(sim); placeAt(sim, 20800); sim.cops.clearAll(); sim.cops.noMoreSpawns = true; sim.traffic.cars = []; sim.peds.peds = [];
+        sim.rv.grace = 0;
+        const c = sim.cops._makeCop('cop', sim.rv.x, sim.rv.z - 15, sim.rv.yaw, 0); sim.cops.cops.push(c);
+        const shots = [];
+        for (let i = 0; i < 60 * 40; i++) {
+          if (Math.floor(sim.heat.value) !== stars) sim.heat.set(stars + 0.5);
+          const s = Math.sin(sim.rv.yaw), co = Math.cos(sim.rv.yaw);
+          c.x = sim.rv.x - s * 15; c.z = sim.rv.z - co * 15; c.vx = sim.rv.vx; c.vz = sim.rv.vz; c.yaw = sim.rv.yaw; c.speed = sim.rv.speed; c.state = 1; c.ramT = 0; c.ramCd = 99;
+          sim.step({ throttle: sim.rv.speed < 14 ? 1 : 0.2, steer: 0 }, DT);
+          for (const e of sim.snapshot().events) if (e.type === EV.COP_SHOT) shots.push(e);
+          if (sim.phase !== 'drive') break;
+        }
+        return { n: shots.length, rv: shots.every((e) => e.target === 'rv'), dmg: sim.damageTaken.rv, chaseStars: sim.cops.copFire().chaseStars };
+      };
+      const h3 = chase('hard', 3), h4 = chase('hard', 4), x3 = chase('extreme', 3), e4 = chase('easy', 4), e5 = chase('easy', 5);
+      console.log(`  chase fire over 40 s (cop 15 m behind the moving RV): Hard 3★ ${h3.n} · Hard 4★ ${h4.n} · Extreme 3★ ${x3.n} · Easy 4★ ${e4.n} · Easy 5★ ${e5.n}`);
+      check('l16 chase fire only from chaseStars (Easy 5★, Hard 4★, Extreme 3★), at the moving RV (hull only)', h3.n === 0 && h4.n > 0 && x3.n > 0 && e4.n === 0 && e5.n > 0 && h4.rv && x3.rv);
+    }
+    // ── cops sent to every stop
+    {
+      const res = [];
+      for (const l of DIFFICULTIES) {
+        const sim = new GameSim(D[l], { seed, solo: false });
+        toDrive(sim);
+        const st = sim.stops.stops[0];
+        sim.rv.z = st.lot.cz; sim.rv.x = st.lot.cx; sim.rv.yaw = sim.road.heading(st.lot.cz); sim.rv.vx = sim.rv.vz = 0; sim.rv.speed = 0;
+        sim.traffic.cars = []; sim.cops.clearAll(); sim.cops.patrols.forEach((p) => { p.spawned = true; });
+        const R = sim.cops.responseRules();
+        let ev = null, h1 = null, firstSpawn = null, n = 0, toast = false;
+        const t0 = sim.t;
+        for (let i = 0; i < 60 * (R.delay + 8); i++) {
+          sim.step({ throttle: 0, handbrake: true }, DT);
+          for (const e of sim.snapshot().events) { if (e.type === EV.STOP_COPS) { ev = e; h1 = sim.heat.value; } if (e.type === 'msg' && /called it in/.test(e.text)) toast = true; }
+          n = sim.cops.cops.filter((c) => c.response === st.def.id).length;
+          if (n > 0 && firstSpawn == null) firstSpawn = sim.t - t0;
+        }
+        res.push({ l, ev, h1, firstSpawn, n, toast, R });
+      }
+      console.log('  ' + res.map((r) => `${r.l}: ${r.ev?.count} cops (eta ${r.ev?.eta} s) heat→${r.h1?.toFixed(2)} first at ${r.firstSpawn?.toFixed(1)} s, ${r.n} spawned`).join(' · '));
+      check('l17 parking at a stop calls in N cops after `delay` s (heat ≥ 1.2, EV.STOP_COPS + toast) — 1 / 2 / 3 per difficulty', res.every((r) => r.ev && r.ev.count === r.R.cops && r.h1 >= 1.2 && r.toast && r.firstSpawn >= r.R.delay - 0.05 && r.firstSpawn < r.R.delay + 2 && r.n === r.R.cops) && res.map((r) => r.n).join() === '1,2,3');
+    }
+    // ── DCMD roof routing; the cook's old roof commands are ignored
+    {
+      const sim = new GameSim(D.hard, { seed, solo: false });
+      toDrive(sim);
+      const got = [];
+      sim.roof = { active: false, roofRook: false, holdsRv: true, command(c) { got.push(c.type); return 'ok'; }, update() {}, state() { return { active: false }; } };
+      const r1 = sim.applyDriverCommand({ type: 'defend', on: true, ai: true });
+      for (const t of ['roofAim', 'roofFire', 'roofReload', 'roofSelect', 'roofThrow']) sim.applyDriverCommand({ type: t });
+      for (const t of ['roofEnter', 'roofLeave', 'roofAim', 'roofThrow']) sim.applyCookCommand({ type: t });
+      placeAt(sim, 16200);
+      const p = { x: sim.rv.x, z: sim.rv.z };
+      for (let i = 0; i < 90; i++) sim.step({ throttle: 1, steer: 0 }, DT);
+      const held = Math.hypot(sim.rv.x - p.x, sim.rv.z - p.z) < 0.05;
+      check('l18 DCMD defend/roofAim/roofFire/roofReload/roofSelect/roofThrow → roof.command(); cook roof* ignored; roof.holdsRv holds the RV; rv.roofDoc false', r1 === 'ok' && got.join() === 'defend,roofAim,roofFire,roofReload,roofSelect,roofThrow' && held && sim.snapshot().rv.roofDoc === false, got.join());
+    }
+  }
+
+  // ── m) full runs on Easy and Extreme (Hard is run a) ─────────────────────────
+  if (run('m')) {
+    hr('m) full 40 km bot runs per difficulty (solo: AI Rook defends the stops)');
+    const seeds = [seed, ...(args.diffSeeds ? String(args.diffSeeds).split(',').map(Number) : [])];
+    const out = {};
+    for (const l of ['easy', 'hard', 'extreme']) {
+      out[l] = [];
+      for (const s of seeds) {
+        const R = (l === 'hard' && s === seed && A) ? A : runFull(data, s, { difficulty: l });
+        const r = R.sim.result || {};
+        const row = { s, phase: R.sim.phase, reason: r.reason ?? R.sim.lostReason, z: R.sim.rv.z, t: R.sim.t, dmg: R.sim.damageTaken.rv, rook: R.sim.damageTaken.driver, looted: R.sim.stops.lootedCount(), stars: R.stat.maxStars, pts: r.points, ended: R.sim.phase === 'won' || R.sim.phase === 'lost', dmgPerKm: R.sim.damageTaken.rv / Math.max(0.5, R.sim.rv.z / 1000) };
+        out[l].push(row);
+        console.log(`  ${l.padEnd(7)} seed ${s}: ${row.phase}/${row.reason} at ${(row.z / 1000).toFixed(1)} km in ${fmtT(row.t)} · hull damage taken ${row.dmg.toFixed(0)} (${row.dmgPerKm.toFixed(1)}/km) · Rook −${row.rook.toFixed(0)} · stops ${row.looted}/8 · ≤${row.stars}★ · ${row.pts} pts`);
+      }
+    }
+    const sum = (l, k) => out[l].reduce((a, r) => a + r[k], 0);
+    const busts = (l) => out[l].filter((r) => r.reason === 'busted' || r.reason === 'wrecked' || r.reason === 'crewDown').length;
+    check('m1 every difficulty runs to an end (won or lost — never stuck)', ['easy', 'hard', 'extreme'].every((l) => out[l].every((r) => r.ended)));
+    check('m2 Easy and Hard deliver on the default seed', out.easy[0].phase === 'won' && out.hard[0].phase === 'won', `easy ${out.easy[0].phase}, hard ${out.hard[0].phase}`);
+    check('m3 Extreme is clearly harder than Hard (more damage per km, or more busts/wrecks) and Easy easier', (sum('extreme', 'dmgPerKm') > sum('hard', 'dmgPerKm') * 1.2 || busts('extreme') > busts('hard')) && sum('easy', 'dmgPerKm') < sum('hard', 'dmgPerKm'),
+      `damage/km easy ${sum('easy', 'dmgPerKm').toFixed(1)} · hard ${sum('hard', 'dmgPerKm').toFixed(1)} · extreme ${sum('extreme', 'dmgPerKm').toFixed(1)}; lost easy ${busts('easy')} · hard ${busts('hard')} · extreme ${busts('extreme')}`);
+  }
+
+  // ── r) DEFEND's own roof tests (sim/test/roof-*.js), each in a child process ─
+  if (run('r')) {
+    const { readdirSync } = await import('node:fs');
+    const { spawnSync } = await import('node:child_process');
+    const { fileURLToPath } = await import('node:url');
+    const dir = fileURLToPath(new URL('./', import.meta.url));
+    let files = [];
+    try { files = readdirSync(dir).filter((f) => /^roof-.*\.(m?js)$/.test(f)).sort(); } catch (e) { files = []; }
+    if (files.length) {
+      hr(`r) DEFEND roof tests: ${files.join(', ')}`);
+      for (const f of files) {
+        const p = spawnSync(process.execPath, [dir + f], { encoding: 'utf8', timeout: 10 * 60 * 1000 });
+        const outp = `${p.stdout || ''}${p.stderr || ''}`.trim().split('\n');
+        console.log(outp.slice(-6).map((x) => '    ' + x).join('\n'));
+        check(`r ${f} passes`, p.status === 0, `exit ${p.status}${p.error ? ' ' + p.error.message : ''}`);
+      }
+    }
   }
 
   // ── summary ───────────────────────────────────────────────────────────────

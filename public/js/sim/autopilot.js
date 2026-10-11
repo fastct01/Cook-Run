@@ -9,6 +9,8 @@
 //     tutorial: 'skip' (default with a sink) → sends skipTutorial; 'play' → walks Rook
 //               through the garage tutorial from snapshot.garage (target / near / task)
 //     autoShop: seconds → sends shopDone { score: autoShopScore (0.8) } after that long shopping
+//     defend (true): at a supply stop, when snapshot.roof.available, sends DCMD defend {on, ai: true}
+//               (the sim's AI Rook climbs onto the roof and shoots — Round 3)
 //   stops (true)          visit supply stops (park, wait while Rook shops / loads)
 //   sim                   optional GameSim: laneBlocked() is used directly when given
 //   ap.skipped            Set of stop ids to drive past (main.js fills it for cruise mode)
@@ -89,6 +91,8 @@ export class Autopilot {
     this.tutorial = opts.tutorial ?? (this.onDriverCommand ? 'skip' : 'play');
     this.autoShop = opts.autoShop ?? null;
     this.autoShopScore = opts.autoShopScore ?? 0.8;
+    this.autoDefend = opts.defend ?? true;
+    this.defendSentT = -9;
     this.useStops = opts.stops ?? true;
     this.prev = new Map();
     this.lastT = null;
@@ -107,7 +111,7 @@ export class Autopilot {
     this.skipSent = false;
     this.shopT0 = null; this.shopSent = null;
     this.gpath = null; this.gtask = null; this.gActT = -9;
-    this.stats = { stopsParked: 0, shopDoneSent: 0 };
+    this.stats = { stopsParked: 0, shopDoneSent: 0, defendSent: 0 };
     this._staticBlockers = this._buildStaticBlockers();
     this.spDefs = new Map((this.route.setpieces || []).map((d) => [d.id, d]));
   }
@@ -253,15 +257,22 @@ export class Autopilot {
       this.abortSent = stop.id;
       this.onDriverCommand({ type: 'shopAbort', stopId: stop.id });
     }
-    const atStop = stop && HOLD.has(stop.state) && !(unwanted && stop.state === 'parked');
+    // Round 3: while Doc is still inside the RV isn't held — driving on cancels the stop
+    const rookUp = !!(snap.roof && snap.roof.active);
+    const atStop = stop && HOLD.has(stop.state) && !(unwanted && (stop.state === 'parked' || (stop.state === 'shopping' && stop.doc === 'in' && !rookUp && !this.onDriverCommand)));
     // don't pull in with cops on our tail: Rook would be out shopping with the RV boxed in
     if (mode === 'stop' && !atStop) {
       const dz = target.st.z - rv.z, hot = snap.heat && snap.heat.stars >= 1 && snap.alert && snap.alert.copDist < (snap.heat.stars >= 2 ? 90 : 55);
       if (snap.bust > 0.15 || (hot && dz < target.st.lotLength / 2 + 40)) { this.skipped.add(target.st.id); mode = 'cruise'; target = null; }
     }
     if (atStop) {
-      // the stop runs: hold still (input is ignored while Rook is out anyway)
+      // the stop runs: hold still (input is ignored while Doc is out / Rook is on the roof anyway)
       this._autoShop(snap);
+      // the cops were called: send the AI Rook up onto the roof (Round 3)
+      if (this.autoDefend && this.onDriverCommand && !unwanted && snap.roof && snap.roof.available && !snap.roof.active && snap.t - this.defendSentT > 1) {
+        this.defendSentT = snap.t; this.stats.defendSent++;
+        this.onDriverCommand({ type: 'defend', on: true, ai: true });
+      }
       if (stop.state === 'loading' && stop.blocked) this.stopWait += dt; else this.stopWait = 0;
       inp.handbrake = true;
       inp.throttle = 0;

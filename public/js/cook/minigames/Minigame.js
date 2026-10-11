@@ -29,7 +29,8 @@ export class Minigame {
   /**
    * @param {object} params  the recipe step from lab.json (type, label, + type-specific numbers)
    * @param {object} ctx     { hazards, product, material:{id,name,color}, rand(), emit(type,data),
-   *                           startFire(amount), hurt(hp), toast(text,tone) }
+   *                           startFire(amount), hurt(hp), toast(text,tone),
+   *                           levers: { zoneScale, burnerFireMult, spillMult } (difficulty, rules.cook) }
    */
   constructor(params = {}, ctx = {}) {
     this.params = params;
@@ -46,6 +47,11 @@ export class Minigame {
     this._failed = false;
     this.failReason = null;
     this.pointer = { x: 0.5, y: 0.5, down: false, inside: false };
+    // difficulty levers (rules.cook; Hard = 1): target zones × zoneScale, unwatched burner × burnerFireMult.
+    // (spillMult is applied by CookLab to feel.bumpHit before it reaches update()).
+    this.levers = ctx.levers || {};
+    this.zoneScale = clamp(+(this.levers.zoneScale ?? 1) || 1, 0.3, 2.5);
+    this.unwatched = false;          // CookLab sets it: a step running while Doc is away from its station
   }
 
   // ── read-only state for CookLab / CookUI ──────────────────────────────────

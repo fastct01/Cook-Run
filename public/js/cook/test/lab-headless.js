@@ -272,5 +272,59 @@ latAcc = 3; bump = 0;
   lab.abortBatch(); tick(60 * 6);
 }
 
+// ── difficulty levers (Round 3: rules.cook via shared/difficulty.js withDifficulty) ──────────
+{
+  const { withDifficulty } = await import('../../shared/difficulty.js');
+  const { createMinigame } = await import('../minigames/index.js');
+  const { mulberry32 } = await import('../../sim/rng.js');
+  const labs = Object.fromEntries(['easy', 'hard', 'extreme'].map((l) => [l, new CookLab(withDifficulty(data, l), { sendCommand: () => {} })]));
+  const L = (l) => labs[l].levers;
+  ok(L('hard').zoneScale === 1 && L('hard').hurtMult === 1 && L('hard').spillMult === 1 && L('hard').burnerFireMult === 1, 'levers: Hard = 1 everywhere');
+  ok(L('easy').zoneScale === 1.3 && L('extreme').zoneScale === 0.7 && L('easy').hurtMult === 0.6 && L('extreme').spillMult === 1.8 && L('extreme').burnerFireMult === 1.5, 'levers: Easy / Extreme values from rules.cook');
+  ok(new CookLab({ lab: data.lab, route: data.route, rules: {} }, {}).levers.zoneScale === 1, 'levers: raw rules without a cook block → Hard defaults');
+  const mg = (l, step) => createMinigame(step, { hazards: data.lab.hazards, rand: mulberry32(7), levers: L(l), toast() {}, emit() {}, startFire() {} });
+  const w = (l) => { const m = mg(l, { type: 'measure', targetMin: 0.6, targetMax: 0.75 }); const h = mg(l, { type: 'heat', bandMin: 180, bandMax: 220, fireAt: 260 });
+    const st = mg(l, { type: 'stir', targetRps: 1 }); const c = mg(l, { type: 'cool' }); return { m: m.max - m.min, h: h.bandMax - h.bandMin, mid: (h.bandMin + h.bandMax) / 2, s: st.tol, c: c.centre }; };
+  const we = w('easy'), wh = w('hard'), wx = w('extreme');
+  ok(Math.abs(wh.m - 0.15) < 1e-9 && wh.h === 40 && Math.abs(wh.s - 0.35) < 1e-9 && Math.abs(wh.c - 0.22) < 1e-9, 'zoneScale: Hard zones unchanged (measure 0.15, heat 40°, stir ±35%, cool 0.22)');
+  ok(we.m > wh.m && wh.m > wx.m && we.h > wh.h && wh.h > wx.h && we.s > wh.s && wh.s > wx.s && we.c > wh.c && wh.c > wx.c && we.mid === 200 && wx.mid === 200,
+    `zoneScale: Easy wider, Extreme narrower, same centre (measure ${we.m.toFixed(3)}/${wh.m.toFixed(3)}/${wx.m.toFixed(3)}, heat ${we.h}/${wh.h}/${wx.h}°)`);
+  // hurtMult: 1 s of choking fumes
+  const hurt = (l) => { const lb = labs[l]; lb.getLabState(); lb.fumes = 0.95; lb.ventOpen = false; for (let i = 0; i < 60; i++) { lb.fumes = 0.95; lb.update(1 / 60); } return lb.getLabState().cookHurt; };
+  const he = hurt('easy'), hh = hurt('hard'), hx = hurt('extreme');
+  ok(hh > 0 && Math.abs(he / hh - 0.6) < 0.05 && Math.abs(hx / hh - 1.5) < 0.05, `hurtMult: fume damage per s Easy ${he} · Hard ${hh} · Extreme ${hx}`);
+  // spillMult: the same bump (0.7) on the mortar
+  const spill = (l) => { const lb = labs[l]; const g = mg(l, { type: 'grind', turns: 6 }); const sm = lb.levers.spillMult;
+    g.update(1 / 60, { latAcc: 0, bump: 0.7, bumpHit: Math.min(1.5, 0.7 * sm) }); return 1 - g.powder; };
+  const se = spill('easy'), sh = spill('hard'), sx = spill('extreme');
+  ok(se === 0 && sh > 0 && sx > sh, `spillMult: powder lost to one 0.7 bump Easy ${se.toFixed(2)} · Hard ${sh.toFixed(2)} · Extreme ${sx.toFixed(2)}`);
+  // spillMult reaches the minigame through CookLab
+  {
+    const lb = labs.extreme;
+    lb.applySnapshot({ phase: 'drive', inv: { mat, units: 0, quality: 0, gadgets: {} }, crew: { driver: 100, cook: 100 }, events: [] });
+    let got = null;
+    lb.requestRecipe('street'); lb.applySnapshot({ events: [{ type: EV.RECIPE_OK, reqId: lb.reqId, recipeId: 'street' }] });
+    const g = lb.current; const orig = g.update.bind(g); g.update = (dt, f) => { got = f.bumpHit; return orig(dt, f); };
+    lb._pendingBump = 0.5; lb.update(1 / 60);
+    ok(Math.abs(got - 0.9) < 1e-9, `spillMult: CookLab scales feel.bumpHit for the step (0.5 → ${got})`);
+    lb.abortBatch(); for (let i = 0; i < 400; i++) lb.update(1 / 60);
+  }
+  // burnerFireMult: walk away from a burner left at the band (dial for 200°) — how soon does it catch fire?
+  const fireAfter = (l) => { let fireT = null; const g = createMinigame({ type: 'heat', bandMin: 180, bandMax: 220, fireAt: 260, duration: 999 },
+    { hazards: data.lab.hazards, rand: mulberry32(11), levers: L(l), toast() {}, emit() {}, startFire() { if (fireT == null) fireT = g.t; } });
+    g.setDial(0.55); for (let i = 0; i < 60 * 25; i++) g.update(1 / 60, {});   // settle while watched
+    g.unwatched = true; const t0 = g.t; for (let i = 0; i < 60 * 90 && fireT == null; i++) g.update(1 / 60, {}); return fireT == null ? null : fireT - t0; };
+  const fe = fireAfter('easy'), fh = fireAfter('hard'), fx = fireAfter('extreme');
+  ok(fx != null && fx < 60 && (fh == null || fh > fx) && (fe == null || (fh != null && fe > fh)), `burnerFireMult: unwatched burner at the band catches fire after Easy ${fe?.toFixed(1) ?? 'never'} · Hard ${fh?.toFixed(1) ?? 'never'} · Extreme ${fx?.toFixed(1) ?? 'never'} s (90 s max)`);
+  // LabState.shop
+  const lb = labs.hard;
+  ok(lb.getLabState().shop === null, 'shop: LabState.shop is null while Doc is not shopping');
+  lb.setShopProgress({ stopId: 'hardware', label: 'Grab the list 2/3', frac: 0.66, tLeft: 21.37 });
+  const sh1 = lb.getLabState().shop;
+  ok(sh1 && sh1.stopId === 'hardware' && sh1.label === 'Grab the list 2/3' && sh1.frac === 0.66 && sh1.tLeft === 21.4, `shop: setShopProgress → LabState.shop ${JSON.stringify(sh1)}`);
+  lb.setShopProgress(null);
+  ok(lb.getLabState().shop === null, 'shop: setShopProgress(null) clears it');
+}
+
 console.log(fails ? `\n${fails} FAILED` : '\nALL PASS');
 process.exit(fails ? 1 : 0);

@@ -201,6 +201,15 @@ export class Hazards3D {
       this.wash.renderOrder = 5;
       this.wash.visible = false;
       interior.root.add(this.wash);
+      // [R3-DOCFP] first person: the −X windows too (child of the fp shell → only shown in first person)
+      if (P.fpGroup && D.FPWIN) {
+        const g2 = D.FPWIN.map(([z0, z1]) => new THREE.PlaneGeometry(z1 - z0 + 0.1, D.WIN1 - D.WIN0 + 0.1).rotateY(Math.PI / 2).translate(-D.XI + 0.02, (D.WIN0 + D.WIN1) / 2, (z0 + z1) / 2));
+        this.washFp = new THREE.Mesh(mergeGeos(g2), this.washMat);
+        this.washFp.name = 'cop_wash_fp';
+        this.washFp.renderOrder = 5;
+        this.washFp.visible = false;
+        P.fpGroup.add(this.washFp);
+      }
     }
     // state
     this.curtK = lab.curtainsClosed ? 1 : 0;
@@ -335,6 +344,7 @@ export class Hazards3D {
     const cop = !!(lab.copAlarm || (snap.alert && snap.alert.copClose));
     const ph = Math.floor(t * 6) % 2;
     this.wash.visible = cop;
+    if (this.washFp) this.washFp.visible = cop;
     if (cop) {
       this.washMat.color.set(ph ? '#ff2a2a' : '#2a5aff');
       this.washMat.opacity = (lab.copAlarm ? 0.62 : 0.4) * (0.7 + 0.3 * Math.sin(t * 37));
@@ -443,6 +453,7 @@ export class Hazards3D {
     if (this.explodeUnsub) this.explodeUnsub();
     if (this.view.rv) this.view.rv.ventOverride = null;
     this.parts.dispose();
+    if (this.washFp) { this.washFp.removeFromParent(); this.washFp.geometry.dispose(); }
     for (const m of [this.flames, this.burn, this.haze, this.wash]) { m.removeFromParent(); m.geometry.dispose(); m.material.dispose(); }
   }
 }

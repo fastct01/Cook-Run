@@ -1,21 +1,24 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// pump — Sunny Gas & Ice forecourt (`store_gas`). Hold E to pump: the meter speeds up as it fills;
-// release on the line (2 tries, best counts). Then bag ice at the chest by the door: mash E to fill
-// 3 bags before they melt.
+// pump — Round 3 first person (agent SHOPS). Sunny Gas & Ice forecourt (`store_gas`): take the nozzle from
+// pump 4 (Doc holds it in his right hand), aim at the RV's filler and HOLD E — the meter speeds up as it fills;
+// let go on the line (2 tries, the best counts; overfill = spill). Then the ice chest by the shop door: mash E
+// to bag 3 bags before they melt.
 // ─────────────────────────────────────────────────────────────────────────────
 import * as THREE from 'three';
 import { createModel } from '../../assets/index.js';
-import { ShopBase, clamp, wrap } from './ShopBase.js';
+import { FpShop, clamp } from './fpBase.js';
 import { Kit, glowSpot, textSign } from './build.js';
-import { el } from '../hud.js';
 
 const PUMP = { x: 7, z: 3.0 };
-const PUMP_STAND = { x: 5.85, z: 3.0 };
+const PUMP_STAND = { x: 5.9, z: 3.0 };
+const FILLER = new THREE.Vector3(5.37, 1.05, 3.9);
 const CHEST = { x: -9.8, z: -0.7 };
 const CHEST_STAND = { x: -9.8, z: 0.55 };
-const LINE = 0.82, TOL = 0.2, BAG_PRESSES = 7, BAGS = 3, MELT = 8;
+const LINE = 0.82, TOL = 0.2, BAG_PRESSES = 6, BAGS = 3, MELT = 8;
 
-export class PumpChallenge extends ShopBase {
+export class PumpChallenge extends FpShop {
+  controls() { return [['Mouse', 'look'], ['W A S D', 'walk'], ['Shift', 'run'], ['E', 'hold: pump · tap: bag']]; }
+
   build() {
     const S = this.scene;
     S.background = new THREE.Color('#c9dde4');
@@ -26,16 +29,20 @@ export class PumpChallenge extends ShopBase {
     Object.assign(sun.shadow.camera, { left: -20, right: 20, top: 14, bottom: -14, near: 1, far: 80 }); sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.04;
     S.add(sun);
     const k = new Kit(1300);
-    k.box('#b9a98a', [80, 0.1, 60], [0, -0.06, 0]);                                // dusty verge
-    k.box('#4a4b4f', [80, 0.02, 9], [0, 0, 13]);                                   // the road in front
+    k.box('#b9a98a', [80, 0.1, 60], [0, -0.06, 0]);
+    k.box('#4a4b4f', [80, 0.02, 9], [0, 0, 13]);
     for (let x = -38; x < 40; x += 6) k.rectY('#e9e2cf', 0.011, [x, x + 3], [12.9, 13.1], { off: 0 });
-    const ground = k.mesh('verge'); ground.castShadow = false; S.add(ground);
+    // the RV's filler cap + a "DIESEL" sticker on the RV's +X flank
+    k.box('#2a2a2b', [0.04, 0.2, 0.2], [FILLER.x - 0.01, FILLER.y, FILLER.z], { c: 0.02 });
+    k.box('#d9b13a', [0.02, 0.16, 0.16], [FILLER.x + 0.02, FILLER.y, FILLER.z], {});
+    S.add(k.mesh('verge'));
     const store = createModel('store_gas', this.def.variant || 0); S.add(store);
     const rv = createModel('rv'); rv.position.set(4, 0, 1.6); S.add(rv);
-    const att = createModel('clerk', 3); att.position.set(-6.4, 0, -0.3); att.rotation.y = 0.4; S.add(att); this.att = att;
+    const att = createModel('clerk', 3); att.position.set(-6.4, 0, -0.3); att.rotation.y = 0.4; S.add(att);
     const sign = textSign('icesign', 'ICE  $2', 1.2, 0.45, { bg: '#2f74ff', fg: '#efe9dc', px: 110 });
     sign.position.set(CHEST.x, 1.75, CHEST.z + 0.42); S.add(sign);
-    // ice bags that appear on top of the chest as they fill
+    const p4 = textSign('pump4', 'PUMP 4', 0.7, 0.24, { bg: '#e2b93b', fg: '#2b2622', px: 90 });
+    p4.position.set(PUMP.x - 0.42, 2.05, PUMP.z); p4.rotation.y = -Math.PI / 2; S.add(p4);
     this.bags = [0, 1, 2].map((i) => {
       const bk = new Kit(1310 + i);
       bk.box('#e8f2f6', [0.32, 0.36, 0.22], [0, 0, 0], { base: true, c: 0.06 });
@@ -43,10 +50,16 @@ export class PumpChallenge extends ShopBase {
       const m = bk.mesh('bag' + i); m.position.set(CHEST.x - 0.5 + i * 0.5, 1.12, CHEST.z + 0.05); m.visible = false; S.add(m);
       return m;
     });
-    // nozzle in Rook's hand (shown while pumping)
+    // the nozzle Doc holds (forward = −Z): pistol grip, trigger guard, spout, a stub of hose
     const nk = new Kit(1320);
-    nk.box('#2a2a2b', [0.06, 0.14, 0.2], [0, 0, 0.04]); nk.cyl('#5f6468', 0.02, 0.02, 0.2, [0, -0.04, 0.2], { axis: 'z', seg: 5 });
-    this.nozzle = nk.mesh('nozzle'); this.nozzle.visible = false; this.rookAv.handR.add(this.nozzle);
+    nk.box('#2a2a2b', [0.05, 0.12, 0.16], [0, -0.01, 0.0], { c: 0.01 });
+    nk.box('#3a3b3d', [0.045, 0.03, 0.13], [0, -0.075, -0.01], {});
+    nk.cyl('#5f6468', 0.016, 0.02, 0.2, [0, 0.035, -0.16], { axis: 'z', seg: 7 });
+    nk.cyl('#1f2022', 0.022, 0.022, 0.24, [0, -0.06, 0.16], { axis: 'z', seg: 6, rot: [0.6, 0, 0] });
+    nk.box('#e2b93b', [0.052, 0.035, 0.05], [0, 0.04, 0.03], {});
+    this.nozzle = nk.mesh('nozzle'); this.nozzle.castShadow = false;
+    // a matching nozzle in the pump holster (hidden while Doc holds it)
+    this.holster = nk.mesh('nozzle_holster'); this.holster.position.set(PUMP.x - 0.38, 1.15, PUMP.z + 0.25); this.holster.rotation.set(0.9, Math.PI / 2, 0); S.add(this.holster);
 
     const W = this.world;
     W.bounds = { x0: -16, x1: 16, z0: -7.5, z1: 10 };
@@ -57,28 +70,49 @@ export class PumpChallenge extends ShopBase {
     for (const [x, z] of [[-1, -0.4], [9, -0.4], [-1, 3.6], [9, 3.6]]) W.circle(x, z, 0.28, 'pillar');
     W.circle(-6.4, -0.3, 0.3, 'attendant'); W.circle(-2.4, -1.0, 0.35, 'bin'); W.circle(13, -4, 0.4, 'air');
 
-    Object.assign(this.rook, { x: 5.9, z: -3.6, yaw: 0 });
-    // below the 5 m canopy, looking in from the road side
-    this.cam = { ...this.cam, yaw: Math.PI * 0.96, dist: 6.6, h: 4.3, look: 1.0, fov: 54, lag: 4 };
+    Object.assign(this.P, { x: 5.9, z: -3.4, yaw: 0, pitch: -0.08 });
     this.stage = 'toPump';
     this.tries = []; this.level = 0; this.pumping = false; this.bagP = 0; this.bagsDone = 0; this.melt = MELT;
-    this.ring = glowSpot('#ffd36a', 0.5, 0.8); S.add(this.ring);
+    this.ring = glowSpot('#F2B90F', 0.45, 0.8); S.add(this.ring);
+    this.hands.setPose('walk', 0.01);
+
+    this.nozzleT = this.addTarget({ id: 'nozzle', pos: new THREE.Vector3(PUMP.x - 0.38, 1.15, PUMP.z + 0.25), r: 0.3, reach: 2.4, label: 'Take the nozzle', sub: 'pump 4', when: () => this.stage === 'toPump', use: () => this._takeNozzle() });
+    this.fillerT = this.addTarget({ id: 'filler', pos: FILLER, r: 0.3, reach: 2.6, key: 'E', label: 'Hold to fill the tank', sub: 'let go on the line', los: false, when: () => this.stage === 'pump' && !this.pumping, use: () => {} });
+    this.chestT = this.addTarget({ id: 'chest', pos: new THREE.Vector3(CHEST.x, 0.95, CHEST.z), r: 0.55, reach: 2.4, label: 'Open the ice chest', sub: 'then mash [E] to bag it', when: () => this.stage === 'toIce', use: () => this._openChest() });
+    this._task();
   }
 
-  _gauge(cap, hint) {
-    if (this.g) this.g.box.remove();
-    const box = el('div', 'ofs-meter', this.hud.root);
-    box.innerHTML = `<div class="ofs-gauge-cap"><span>${cap}</span><span>${hint}</span></div><div class="ofs-gauge"><div class="zone"></div><div class="fill"></div><div class="line"></div></div>`;
-    this.g = { box, gauge: box.querySelector('.ofs-gauge'), fill: box.querySelector('.fill'), zone: box.querySelector('.zone'), line: box.querySelector('.line'), cap: box.querySelector('span') };
-    return this.g;
+  _task() {
+    const st = this.stage;
+    const pumpDone = st === 'toIce' || st === 'ice';
+    const rows = [
+      { text: 'Take the nozzle', icon: 'gauge', state: st === 'toPump' ? 'cur' : 'done' },
+      { text: `Fill on the line${this.tries.length ? ` (${this.tries.length}/2)` : ''}`, icon: 'drop', state: st === 'pump' ? 'cur' : pumpDone ? 'done' : 'todo' },
+      { text: `Bag the ice ${this.bagsDone}/${BAGS}`, icon: 'snow', state: pumpDone ? (this.bagsDone >= BAGS ? 'done' : 'cur') : 'todo' },
+    ];
+    const foot = st === 'pump' ? 'Aim at the filler, hold E, let go on the line.' : st === 'toIce' ? 'Ice chest by the shop door.' : st === 'ice' ? 'Mash E before it melts!' : 'Pump 4, by the RV.';
+    this.hud.setTask({ cap: 'Pump & ice', n: `${(st === 'toPump' ? 0 : pumpDone ? 2 : 1) + (this.bagsDone >= BAGS ? 1 : 0)}/3`, store: this.def.name, rows, foot });
+  }
+
+  _takeNozzle() {
+    this.stage = 'pump'; this.level = 0;
+    this.holster.visible = false;
+    this.hands.setPose('pump', 0.22);
+    this.hands.hold(this.nozzle, 'r', { pos: [0, 0.01, 0.02] });
+    this._task();
+  }
+  _openChest() {
+    this.stage = 'ice'; this.melt = MELT; this.ring.visible = false;
+    this.hands.setPose('grab', 0.2);
+    this._task();
   }
 
   step(h) {
-    const R = this.rook;
     if (this.stage === 'pump') {
-      R.vx = R.vz = R.speed = 0; R.carry = 'nozzle';
-      R.yaw += wrap(Math.PI / 2 - R.yaw) * Math.min(1, h * 8);
-      const holding = this.actHeld;
+      this.consumeAct();                       // E here is the pump trigger, not a target "use"
+      this.walkStep(h, { speedMul: 0.6, canRun: false });
+      const aiming = this.focus === this.fillerT || this.pumping;
+      const holding = this.actHeld && aiming;
       if (holding && !this.pumping && this.level === 0) this.pumping = true;
       if (this.pumping) {
         if (holding) {
@@ -86,46 +120,27 @@ export class PumpChallenge extends ShopBase {
           if (this.level >= 1) { this.level = 1; this._release(true); }
         } else this._release(false);
       }
-      this.prompt = { text: this.pumping ? 'Let go on the line!' : `Hold [E] to pump — try ${this.tries.length + 1}/2`, near: true, sub: 'it speeds up as it fills' };
+      this.handAct = this.pumping ? 1 : 0;
+      this.promptOverride = this.pumping ? { key: 'E', text: 'Let go on the line!', sub: `${Math.round(this.level * 100)}% · line at ${Math.round(LINE * 100)}%` } : null;
+      this.goal = this.pumping ? null : FILLER;
       return;
     }
     if (this.stage === 'ice') {
-      R.vx = R.vz = R.speed = 0; R.carry = null;
-      R.yaw += wrap(Math.PI - R.yaw) * Math.min(1, h * 8);
+      this.B.speed = 0;
       this.melt -= h;
       if (this.actPressed) {
-        this.bagP++; R.act = 0.25;
-        if (this.bagP >= BAG_PRESSES) { this.bags[this.bagsDone].visible = true; this.bagsDone++; this.bagP = 0; this.popAt(`Bag ${this.bagsDone}!`, 'good', CHEST.x, 2.2, CHEST.z); }
+        this.consumeAct();
+        this.bagP++; this.hands.reach(this.bagP % 2 ? 'r' : 'l', 0.22);
+        if (this.bagP >= BAG_PRESSES) { this.bags[this.bagsDone].visible = true; this.bagsDone++; this.bagP = 0; this.toast(`Bag ${this.bagsDone}!`, 'good'); this._task(); }
       }
-      const frac = (this.bagsDone + this.bagP / BAG_PRESSES) / BAGS;
-      this.g.fill.style.width = `${frac * 100}%`;
-      this.g.cap.innerHTML = `BAG THE ICE · <b>${this.bagsDone}/${BAGS}</b> · melting in ${Math.max(0, this.melt).toFixed(1)}s`;
-      this.prompt = { text: 'Mash [E] to bag the ice!', near: true };
-      if (this.bagsDone >= BAGS || this.melt <= 0) { this.g.box.remove(); this.g = null; this._finishOk(); }
+      this.promptOverride = { key: 'E', text: 'Mash to bag the ice!', sub: `bag ${Math.min(this.bagsDone + 1, BAGS)} of ${BAGS}` };
+      if (this.bagsDone >= BAGS || this.melt <= 0) { this.promptOverride = null; this.hud.gauge(null); this._finishOk(); }
       return;
     }
-    this.walkRook(h);
-    if (this.stage === 'toPump') {
-      const at = this.near(PUMP_STAND, 1.15);
-      this.prompt = { text: at ? 'Grab the nozzle [E]' : 'Walk to pump 4', near: at };
-      this._ringAt(PUMP_STAND);
-      if (at && this.actPressed) {
-        this.stage = 'pump'; this.ring.visible = false;
-        R.x += (PUMP_STAND.x - R.x) * 0.7; R.z += (PUMP_STAND.z - R.z) * 0.7;
-        const g = this._gauge('FUEL · <b>try 1/2</b>', 'release on the line');
-        g.zone.style.left = `${(LINE - 0.05) * 100}%`; g.zone.style.width = '10%'; g.line.style.left = `${LINE * 100}%`;
-        this.nozzle.visible = true;
-      }
-    } else if (this.stage === 'toIce') {
-      const at = this.near(CHEST_STAND, 1.2);
-      this.prompt = { text: at ? 'Open the ice chest [E]' : 'Ice chest by the shop door', near: at };
-      this._ringAt(CHEST_STAND);
-      if (at && this.actPressed) {
-        this.stage = 'ice'; this.ring.visible = false; this.melt = MELT;
-        const g = this._gauge('BAG THE ICE', 'mash <kbd>E</kbd>');
-        g.zone.style.display = 'none'; g.line.style.display = 'none';
-      }
-    }
+    this.handAct = 0;
+    this.walkStep(h);
+    if (this.stage === 'toPump') { this.goal = this.nozzleT.pos; this._ringAt(PUMP_STAND); }
+    else if (this.stage === 'toIce') { this.goal = this.chestT.pos; this._ringAt(CHEST_STAND); }
   }
   _ringAt(p) { this.ring.visible = true; this.ring.position.set(p.x, 0, p.z); }
 
@@ -133,18 +148,19 @@ export class PumpChallenge extends ShopBase {
     this.pumping = false;
     const acc = spill ? 0 : clamp(1 - Math.abs(this.level - LINE) / TOL, 0, 1);
     this.tries.push(acc);
-    const txt = spill ? 'SPILL! Gas everywhere…' : acc > 0.9 ? 'Bang on the line!' : acc > 0.6 ? 'Close!' : this.level < LINE ? 'Too early' : 'Over!';
-    this.popAt(txt, spill || acc < 0.6 ? 'bad' : 'good', PUMP.x, 2.4, PUMP.z);
-    this.g.gauge.classList.remove('flash', 'miss'); void this.g.gauge.offsetWidth; this.g.gauge.classList.add(acc > 0.6 ? 'flash' : 'miss');
+    const txt = spill ? 'SPILL! Diesel everywhere…' : acc > 0.9 ? 'Bang on the line!' : acc > 0.6 ? 'Close!' : this.level < LINE ? 'Too early' : 'Over!';
+    this.toast(txt, spill || acc < 0.6 ? 'bad' : 'good');
+    this.hud.gaugeFlash(acc > 0.6);
     if (spill) this.shake = 0.4;
     if (this.tries.length >= 2 || acc >= 0.8) {
       this.pumpAcc = Math.max(...this.tries);
-      this.stage = 'toIce'; this.nozzle.visible = false; this.rook.carry = null;
-      setTimeout(() => { if (this.g && this.stage !== 'ice') { this.g.box.remove(); this.g = null; } }, 700);
-    } else {
-      this.level = 0;
-      this.g.cap.innerHTML = 'FUEL · <b>try 2/2</b>';
-    }
+      this.stage = 'toIce';
+      this.hands.hold(null, 'r'); this.holster.visible = true;
+      this.hands.setPose('walk', 0.25);
+      this.handAct = 0; this.promptOverride = null;
+      this._gaugeHold = 0.7;
+    } else this.level = 0;
+    this._task();
   }
 
   _finishOk() {
@@ -154,29 +170,31 @@ export class PumpChallenge extends ShopBase {
     this.finish(score, [`Pump: ${Math.round((this.pumpAcc ?? 0) * 100)}% on the line (${this.tries.length} ${this.tries.length > 1 ? 'tries' : 'try'})`, `Ice: ${this.bagsDone}/${BAGS} bags`, `${Math.round(this.t + this.penalty)}s on the forecourt`]);
   }
   timeUp() { return { score: clamp(0.25 * (this.pumpAcc ?? 0) + 0.1 * this.bagsDone / BAGS, 0, 0.35), lines: [] }; }
+  progress() {
+    if (this.stage === 'toPump') return { label: 'To pump 4', frac: 0.05 };
+    if (this.stage === 'pump') return { label: `Pumping ${this.tries.length + 1}/2`, frac: 0.15 + 0.3 * this.level };
+    if (this.stage === 'toIce') return { label: 'To the ice', frac: 0.5 };
+    return { label: `Ice ${this.bagsDone}/${BAGS}`, frac: 0.6 + 0.4 * (this.bagsDone + this.bagP / BAG_PRESSES) / BAGS };
+  }
 
   visual(dt) {
-    const R = this.rook;
-    if (this.stage === 'pump') { this.cam.x = (R.x + PUMP.x) / 2; this.cam.z = R.z - 0.6; this.cam.dist = 5.4; this.cam.h = 3.6; }
-    else { this.cam.x = R.x; this.cam.z = R.z - 0.5; this.cam.dist = 6.6; this.cam.h = 4.3; }
-    if (this.g && this.stage === 'pump') this.g.fill.style.width = `${this.level * 100}%`;
     if (this.ring.visible) this.ring.userData.set(0.55 + 0.45 * Math.sin(this.t * 5));
+    if (this.stage === 'pump') this.hud.gauge({ cap: `Fuel · try <b>${Math.min(this.tries.length + 1, 2)}/2</b>`, hint: 'hold [E] · let go on the line', zone: [LINE - 0.05, LINE + 0.05], line: LINE, fill: this.level });
+    else if (this.stage === 'ice') this.hud.gauge({ cap: `Bag the ice · <b>${this.bagsDone}/${BAGS}</b>`, hint: 'mash [E]', fill: (this.bagsDone + this.bagP / BAG_PRESSES) / BAGS });
+    else if (this._gaugeHold > 0) this._gaugeHold -= dt;
+    else this.hud.gauge(null);
+    this.alertInfo = this.stage === 'ice' ? { icon: 'snow', text: 'Melting', sub: `${Math.max(0, this.melt).toFixed(1)}s`, frac: Math.max(0, this.melt) / MELT, tone: this.melt < 3 ? 'red' : 'amber' } : null;
   }
 
   bot(h) {
-    const R = this.rook;
     if (this.stage === 'pump') {
-      if (!this.pumping && this.level === 0) return { held: true };
-      return { held: this.level < LINE - 0.012 };
+      const a = this.botAim(FILLER);
+      if (!this.pumping && this.level === 0) return { ...a, held: this.focus === this.fillerT };
+      return { ...a, held: this.level < LINE - 0.012 };
     }
-    if (this.stage === 'ice') { this._mash = (this._mash || 0) + h; if (this._mash > 0.11) { this._mash = 0; return { act: true }; } return {}; }
-    const goal = this.stage === 'toPump' ? PUMP_STAND : CHEST_STAND;
-    if (this.near(goal, 1.0)) return { act: true };
-    if (!this._bp || this._bp.goal !== goal) this._bp = { goal, path: this.world.path(R.x, R.z, goal.x, goal.z, 0.34) };
-    const P = this._bp.path;
-    while (P.length > 1 && Math.hypot(P[0].x - R.x, P[0].z - R.z) < 0.45) P.shift();
-    const w = P[0] || goal, dx = w.x - R.x, dz = w.z - R.z, l = Math.hypot(dx, dz) || 1;
-    return { move: { x: dx / l, z: dz / l }, run: true };
+    if (this.stage === 'ice') { this._mash = (this._mash || 0) + h; const a = this.botAim(this.chestT.pos); if (this._mash > 0.11) { this._mash = 0; return { ...a, act: true }; } return a; }
+    if (this.stage === 'toPump') return this.botUse(this.nozzleT, h, { stand: PUMP_STAND });
+    return this.botUse(this.chestT, h, { stand: CHEST_STAND });
   }
   debugExtra() { return { stage: this.stage, level: +this.level.toFixed(2), tries: this.tries, bags: this.bagsDone }; }
 }

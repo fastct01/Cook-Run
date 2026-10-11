@@ -1,5 +1,6 @@
 // Scripted garage player for tests/harness (not used by the game). Walks to state.target[who] along
-// planned waypoints and presses E when `near`; holds E on the crank. World-space output.
+// planned waypoints and presses E when `near`; holds E on the crank and at the suit rack (R3-GARAGE).
+// World-space output.
 import { planPath, garageFrame } from '../../sim/garage.js';
 
 export class GarageBot {
@@ -8,6 +9,8 @@ export class GarageBot {
     const out = { mx: 0, mz: 0, run: true, act: false, held: false };
     if (!G) return out;
     this.cd = Math.max(0, this.cd - dt);
+    const task = G.task ? G.task[this.who] : null;
+    if (task !== this.lastTask) { this.lastTask = task; this.cd = 0; }   // a new task: E is free again
     const me = G[this.who];
     if (G.task && G.task[this.who] === 'crank' && this.who === 'rook') {
       out.held = true;
@@ -18,7 +21,11 @@ export class GarageBot {
     if (!tgt || !me || me.inRv) return out;
     const L = this.F.toLocal(me.x, me.z), T = this.F.toLocal(tgt.x, tgt.z);
     if (!this.goal || Math.hypot(this.goal.x - T.x, this.goal.z - T.z) > 0.2) { this.goal = T; this.path = planPath(L.x, L.z, T.x, T.z); }
-    if (G.near && G.near[this.who]) { if (this.cd === 0) { out.act = true; this.cd = 0.35; } return out; }
+    if (G.near && G.near[this.who]) {
+      if (G.task && G.task[this.who] === 'suit') { out.held = true; if (this.cd === 0) { out.act = true; this.cd = 10; } return out; }   // hold E 1.5 s
+      if (this.cd === 0) { out.act = true; this.cd = 0.35; }
+      return out;
+    }
     if (this.path && this.path.length > 1 && Math.hypot(L.x - this.path[0].x, L.z - this.path[0].z) < 0.4) this.path.shift();
     const w = this.path && this.path.length ? this.path[0] : T;
     let dx = w.x - L.x, dz = w.z - L.z; const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;

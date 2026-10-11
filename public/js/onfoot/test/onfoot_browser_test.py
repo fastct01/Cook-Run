@@ -3,11 +3,12 @@
 Browser test for Agent ONFOOT (headless Chromium + SwiftShader).
 
     cd public && python3 -m http.server 8203 &      # or let this script start one
-    python3 public/js/onfoot/test/onfoot_browser_test.py [--port 8203] [--shots DIR]
+    python3 public/js/onfoot/test/onfoot_browser_test.py [--port 8203] [--shots DIR] [--only garage|shops]
 
   1. garage, driver + cook + solo (AI Doc): both avatars scripted through the real input paths (GarageView key path for
-     "me", CMD/DriverInput for the partner) on the real GameSim → tutorial done, GarageView fades out and
-     releases the camera (finished), zero console errors
+     "me", CMD/DriverInput for the partner) on the real GameSim → tutorial done (7 steps incl. R3 Suit up: both
+     suited, the avatars swapped to the suited models, the rack empty), the way-out arrows lit once the engine runs,
+     GarageView fades out and releases the camera (finished), zero console errors
   2. every supply stop (8 stops, 7 shop types): scripted player through ShopChallenge's key path →
      onDone fires with 0 < score <= 1, zero console errors, draw calls <= 150
 """
@@ -16,6 +17,7 @@ import os, sys, time, subprocess, socket, json, argparse
 ap = argparse.ArgumentParser()
 ap.add_argument('--port', type=int, default=8203)
 ap.add_argument('--shots', default=None)
+ap.add_argument('--only', default=None, choices=['garage', 'shops'])
 args = ap.parse_args()
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))   # public/
 BASE = f'http://localhost:{args.port}/onfoot-test.html'
@@ -51,7 +53,7 @@ def page_with_log(b):
 with sync_playwright() as p:
     b = p.chromium.launch(args=['--use-gl=swiftshader', '--enable-webgl', '--ignore-gpu-blocklist'])
     # ── 1. garage ────────────────────────────────────────────────────────────
-    for role, q in (('driver', 'bot=both'), ('cook', 'bot=both'), ('driver', 'bot=me&solo=1')):
+    for role, q in ((('driver', 'bot=both'), ('cook', 'bot=both'), ('driver', 'bot=me&solo=1')) if args.only != 'shops' else ()):
         if 'solo' in q: role_tag = 'solo'
         else: role_tag = role
         print(f'\n── garage · {role_tag} ──', flush=True)
@@ -65,6 +67,15 @@ with sync_playwright() as p:
         G = json.loads(st) if st and st != 'null' else {}
         check(f'{role_tag}: tutorial completed by scripted players ({"GameSim" if real else "local loop"})', t > 0, f'{t:.1f} s sim time')
         check(f'{role_tag}: final items', G.get('items', {}).get('engine') == 'on' and G.get('items', {}).get('crate') == 'rv' and G.get('rook', {}).get('inRv') and G.get('doc', {}).get('inRv'), G.get('items'))
+        # R3-GARAGE: Suit up — both suited, the rack empty, the view swapped both avatars to the suited models
+        pg.evaluate('(() => { const O = window.__onfoot; const s = O.sim ? O.sim.snapshot() : null; for (let i = 0; i < 3; i++) O.gv.update(0.05, s); })()')
+        sv = pg.evaluate('''(() => { const O = window.__onfoot, G = O.state(), gv = O.gv;
+            const m = (who) => gv.av[who].model.userData; const rs = (gv.rackSuits || []).map((o) => o && o.visible);
+            return { steps: G.steps.length, suited: [G.rook.suited, G.doc.suited], suits: G.items.suits, rook: [m('rook').kind, m('rook').variant], doc: [m('doc').kind, m('doc').variant], rack: rs, props: (gv.props || []).length }; })()''')
+        check(f'{role_tag}: 7 steps; both suited; suited models; rack empty; 10 lab props', sv['steps'] == 7 and sv['suited'] == [True, True] and sv['suits'] == [False, False] and sv['rook'] == ['driver', 1] and sv['doc'] == ['crew_suited', 1] and sv['rack'] == [False, False] and sv['props'] == 10, sv)
+        time.sleep(2.5)   # a few rendered frames: the view (StructuresView → ExitArrows) sees the engine-on snapshots
+        ar = pg.evaluate('window.__onfoot.arrows()')
+        check(f'{role_tag}: way-out arrows lit once the engine runs', ar is not None and ar.get('on') and not ar.get('done'), ar)
         # let the view see the countdown snapshot, fade out and release the camera
         r = pg.evaluate('''(() => { const O = window.__onfoot; const s = O.sim ? O.sim.snapshot() : { phase: 'countdown', garage: O.state() };
             const ph = s.phase; for (let i = 0; i < 15 && !O.gv.finished; i++) O.gv.update(0.1, s); return [ph, O.gv.finished, !window.__view.cameraController]; })()''')
@@ -75,7 +86,7 @@ with sync_playwright() as p:
         check(f'{role_tag}: zero console errors', not errs, errs[:3])
         pg.close()
     # ── 2. shops ─────────────────────────────────────────────────────────────
-    stops = ['hardware', 'market', 'chandlery', 'gas_ice', 'megamart', 'farm', 'junkyard', 'lastgas']
+    stops = ['hardware', 'market', 'chandlery', 'gas_ice', 'megamart', 'farm', 'junkyard', 'lastgas'] if args.only != 'garage' else []
     for stop in stops:
         print(f'\n── shop · {stop} ──', flush=True)
         pg, errs = page_with_log(b)

@@ -19,6 +19,7 @@ import { buildRigProto } from './rig.js';
 import { ANIMS, compileChannels, evalChannels } from './ents/anims.js';
 import { CONTROLLERS } from './ents/controllers.js';
 import { copStatus, disposeCopFx } from './ents/copfx.js';
+import { copEvent } from './ents/copDamage.js';   // R3-DEFEND: gun events on police cars
 import { CUSTOM_BUILDERS, PAINT_COLORS } from './ents/models.js';
 import { TornadoView } from './ents/tornado.js';
 import { StormLight } from './ents/storm.js';
@@ -183,6 +184,9 @@ export class EntityView {
     if (!list) { list = []; this.pool.set(inst.key, list); }
     if (list.length < 24) list.push(inst); else if (inst.rig) inst.rig.dispose();
   }
+
+  /** R3-DEFEND: snapshot events forwarded by WorldView._event (EV.COP_HIT / COP_DISABLED / COP_SHOT). */
+  event(ev, snap) { try { copEvent(this, ev, snap); } catch (e) { if (!this._r3evWarned) { this._r3evWarned = true; console.error('[ents] gun event', e); } } }
 
   // ── helpers used by the controllers (ents/controllers.js, ents/copfx.js) ─
   word(text, x, y, z, opts) { const fx = this.scene.userData && this.scene.userData.crFx; if (fx && fx.popWord) fx.popWord(text, x, y, z, opts); }

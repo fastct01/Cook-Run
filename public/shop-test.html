@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cook &amp; Run — shop run test</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/fonts.css">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/onfoot.css">
+<style>
+  html, body { margin: 0; height: 100%; background: #0E0F11; overflow: hidden; }
+  #stage { position: fixed; inset: 0; }
+  #view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #hudroot { position: absolute; inset: 0; pointer-events: none; }
+  #dbg { position: fixed; left: 50%; bottom: 0; transform: translateX(-50%); z-index: 20; display: flex; gap: 4px; flex-wrap: wrap; justify-content: center;
+         font: 600 11px/1 system-ui, sans-serif; color: #F1ECE4; padding: 4px 6px; background: rgba(14,15,17,.7); border-radius: 6px 6px 0 0; pointer-events: auto; }
+  #dbg a, #dbg button { color: #F2B90F; text-decoration: none; padding: 3px 5px; border-radius: 4px; background: rgba(255,255,255,.06); border: 0; font: inherit; cursor: pointer; }
+  #dbg a.on { background: #F2B90F; color: #0E0F11; }
+  #dbg span { padding: 3px 4px; opacity: .8; font-variant-numeric: tabular-nums; }
+  body.shot #dbg { display: none; }
+  /* &chrome=1: static stand-ins for the HUD agent's panels (Wanted, bags/score, bars) so screenshots read like Cook-Shop.png */
+  .mock { position: absolute; z-index: 6; box-sizing: border-box; background: rgba(14,15,17,.72); border: 1px solid rgba(255,255,255,.10); border-radius: 10px;
+          box-shadow: 0 6px 18px rgba(0,0,0,.26); backdrop-filter: blur(10px); font-family: 'Archivo', sans-serif; color: #F1ECE4; padding: 10px 12px 0; }
+  .mock .c { font-stretch: 75%; font-weight: 700; font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; color: #BDB8B0; }
+  .mock .row { display: flex; align-items: center; gap: 8px; height: 14px; margin-bottom: 5px; }
+  .mock .bar { position: relative; flex: 1; height: 5px; background: rgba(255,255,255,.14); border-radius: 3px; overflow: hidden; }
+  .mock .bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; }
+  .mock b { font-stretch: 88%; font-weight: 750; }
+</style>
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+</head>
+<body>
+<div id="stage">
+  <canvas id="view" tabindex="-1"></canvas>
+  <div id="hudroot"></div>
+</div>
+<div id="dbg"></div>
+<script type="module">
+// Harness for agent SHOPS (Round 3 first-person shop runs).
+//   shop-test.html?type=collect|trolley|haggle|forklift|pump|goat|crane|alarm   (or ?stop=<route stop id>)
+//     &bot=1        scripted player (same key/look path as a human)
+//     &fake=1       a hand-made stop def + rules instead of route.json/rules.json
+//     &world=1      draw through the real WorldView (default: a minimal view with the same setSceneOverride API)
+//     &chrome=1     static stand-ins for the HUD agent's panels (screenshots)
+//     &shot=1       hide the debug bar · &dt=0.033 fixed frame step · &yaw=&pitch= initial look · &ff=sec fast-forward
+// window.__shop = { shop, view, stop, done, score, aborted, progress: [], key(code, down), look(yaw, pitch), fast(sec),
+//                   state(), calls, pointer(type, dx, dy) }
+import * as THREE from 'three';
+import { loadData } from './js/data/loadData.js';
+import { ShopChallenge } from './js/onfoot/shops/ShopChallenge.js';
+
+const q = new URLSearchParams(location.search);
+const TYPE_STOP = { collect: 'hardware', trolley: 'megamart', haggle: 'market', forklift: 'chandlery', pump: 'gas_ice', goat: 'farm', crane: 'junkyard', alarm: 'lastgas' };
+const fixedDt = q.has('dt') ? +q.get('dt') : null;
+if (q.has('shot')) document.body.classList.add('shot');
+
+const canvas = document.getElementById('view');
+const hudRoot = document.getElementById('hudroot');
+let data = null;
+try { data = await loadData(); } catch (e) { console.warn('[shop-test] data', e); }
+const fake = q.get('fake') === '1' || !data;
+const type = q.get('type') || 'collect';
+const stopId = q.get('stop') || TYPE_STOP[type] || 'hardware';
+let stopDef = !fake && data.route.stops.find((s) => s.id === stopId);
+if (!stopDef) {
+  const t = Object.entries(TYPE_STOP).find(([, s]) => s === stopId)?.[0] || type;
+  stopDef = { id: stopId, name: 'Test Store', z: 0, shop: { type: t === 'trolley' ? 'collect' : t, variant: t === 'trolley' ? 'trolley' : undefined, title: 'Test run', goal: 'Do the thing', items: 3, timeLimit: 35 } };
+}
+const shopData = fake ? { rules: { stops: { bonusScore: 0.8 }, shops: { timeMult: +(q.get('mult') || 1) } }, route: { stops: [stopDef] } } : data;
+
+// the view: real WorldView or a minimal one with the same API the shop uses
+let view;
+if (q.get('world') === '1' && data) {
+  const { WorldView } = await import('./js/render/WorldView.js');
+  view = new WorldView(canvas, data, { seed: data.route.defaultSeed ?? 1, role: 'cook' });
+} else {
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(1.5, devicePixelRatio || 1));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  const fit = () => renderer.setSize(canvas.clientWidth || innerWidth, canvas.clientHeight || innerHeight, false);
+  fit(); addEventListener('resize', fit);
+  view = { renderer, canvas, _sceneOverride: null, setSceneOverride(fn) { this._sceneOverride = fn; }, render(dt) { if (this._sceneOverride) this._sceneOverride(renderer, dt, this); else renderer.clear(); } };
+}
+
+if (q.get('chrome') === '1') {
+  const m = (style, html) => { const d = document.createElement('div'); d.className = 'mock'; d.style.cssText = style; d.innerHTML = html; hudRoot.appendChild(d); };
+  m('left:16px;top:16px;width:232px;height:56px', '<div class="c">Wanted</div><div style="display:flex;align-items:center;gap:10px;margin-top:10px"><span style="color:#F2B90F;font-size:14px;letter-spacing:2px">★★★<span style="opacity:.35">★★</span></span><div class="bar"><i style="width:34%;background:#F2B90F"></i></div><b style="font-size:12px">34%</b></div>');
+  m('right:16px;top:16px;width:232px;height:56px', '<div style="display:flex;gap:12px"><div style="width:78px"><div class="c">Bags</div><div style="margin-top:6px"><b style="font-size:19px">3</b><span style="color:#BDB8B0;font-size:13px">/6</span></div></div><div><div class="c">Score</div><div style="margin-top:6px"><b style="font-size:19px">12,480</b></div></div></div>');
+  m('right:16px;bottom:16px;width:232px;height:64px;padding-top:9px', ['RV hull|78|#D9D3C9', 'Rook|88|#E07A3C', 'Doc|64|#5FB3A8'].map((r) => { const [a, v, c] = r.split('|'); return `<div class="row"><span class="c" style="width:50px">${a}</span><div class="bar"><i style="width:${v}%;background:${c}"></i></div><b style="font-size:12px;width:24px;text-align:right">${v}</b></div>`; }).join(''));
+}
+
+const S = window.__shop = { view, stop: stopDef, done: false, score: null, aborted: false, progress: [], errors: [] };
+const shop = new ShopChallenge(view, stopDef, shopData, {
+  hudRoot, firstPerson: true, selfDrive: false,
+  onDone: (score) => { S.done = true; S.score = score; console.log('[shop-test] onDone', score); },
+  onAbort: () => { S.aborted = true; console.log('[shop-test] onAbort'); },
+  onProgress: (p) => { S.progress.push(p); if (S.progress.length > 400) S.progress.shift(); S.lastProgress = p; },
+});
+S.shop = shop;
+window.addEventListener('keydown', (e) => { if (shop.onKey(e, true)) e.preventDefault(); });
+window.addEventListener('keyup', (e) => { if (shop.onKey(e, false)) e.preventDefault(); });
+S.key = (code, down) => shop.onKey({ code, key: code, repeat: false, preventDefault() {} }, down);
+S.look = (yaw, pitch) => shop.setLook(yaw, pitch);
+S.fast = (sec) => shop.fastForward(sec);
+S.state = () => shop.debugState();
+S.pointer = (type, dx = 0, dy = 0, button = 0) => shop.onPointer({ type, movementX: dx, movementY: dy, button, buttons: type === 'mouseup' ? 0 : 1 });
+if (q.has('yaw') || q.has('pitch')) shop.setLook(q.has('yaw') ? +q.get('yaw') : null, q.has('pitch') ? +q.get('pitch') : null);
+if (q.get('bot') === '1') shop.setBot(true);
+if (q.has('ff')) shop.fastForward(+q.get('ff'));
+
+// debug bar
+const dbg = document.getElementById('dbg');
+for (const [t, s] of Object.entries(TYPE_STOP)) {
+  const a = document.createElement('a'); const p = new URLSearchParams(q); p.set('type', t); p.delete('stop');
+  a.href = '?' + p; a.textContent = t; if (stopDef.id === s) a.className = 'on'; dbg.appendChild(a);
+}
+const bb = document.createElement('button'); bb.textContent = 'bot'; bb.onclick = () => shop.setBot(!shop.impl.botOn); dbg.appendChild(bb);
+const info = document.createElement('span'); dbg.appendChild(info);
+
+let last = performance.now();
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = fixedDt ?? Math.min(0.1, (now - last) / 1000); last = now;
+  if (!S.paused) shop.update(dt);
+  view.render(dt);
+  S.calls = view.renderer.info.render.calls;
+  S.frames = (S.frames || 0) + 1;
+  const s = shop.debugState();
+  info.textContent = `${stopDef.id} · ${s.type}${s.variant ? '/' + s.variant : ''} · ${s.phase} · t ${s.t} · left ${s.timeLeft} · calls ${S.calls}${S.done ? ' · score ' + S.score.toFixed(2) : ''}`;
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

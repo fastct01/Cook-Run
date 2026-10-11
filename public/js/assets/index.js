@@ -65,6 +65,11 @@ const REGISTRY = {
   ...VEHICLE_BUILDERS, ...CHARACTER_BUILDERS, ...PROP_BUILDERS, ...SCENERY_BUILDERS, ...STORE_BUILDERS, ...BRIDGE,
   ...X_BUILDERS,   // expansion packs (assets/expansion/*)
 };
+// R3-GARAGE: Rook is the young Rook everywhere — createModel('driver', v) builds `rook_young` v (v0 casual,
+// v1 suited: yellow suit, hood down, nitrile gloves). Same rig (body/head/arm_*/leg_* pivots at the old
+// driver's positions), so onfoot/avatar.js, van/interior.js poseSeated and every other consumer work as before.
+// The kind stays 'driver' (userData.kind), only the builder is swapped.
+if (X_BUILDERS.rook_young) REGISTRY.driver = { build: (v) => X_BUILDERS.rook_young.build(v), variants: X_BUILDERS.rook_young.variants || 2 };
 
 export const CATEGORIES = Object.freeze({
   vehicles: ['rv', 'cop', 'cop_suv', 'heli', 'sedan', 'hatch', 'van', 'pickup', 'bus', 'truck', 'tractor', 'rival', 'train'],
@@ -114,7 +119,7 @@ export const NAMED_PARTS = Object.freeze({
 const LABELS = {
   rv: 'The RV (hero)', cop: 'Patrol car', cop_suv: 'Police SUV', heli: 'Police helicopter', sedan: 'Sedan', hatch: 'Hatchback',
   van: 'Van', pickup: 'Pickup', bus: 'City bus', truck: 'Semi truck', tractor: 'Tractor', rival: 'Rival pickup', train: 'Freight train',
-  driver: 'Rook (driver)', cook: 'Doc (cook)', ped: 'Pedestrian', cow: 'Cow',
+  driver: 'Rook (driver · young; v1 suited)', cook: 'Doc (cook)', ped: 'Pedestrian', cow: 'Cow',
   cone: 'Traffic cone', trashcan: 'Trash can', mailbox: 'Mailbox', hydrant: 'Hydrant', barrier: 'Barrier', sprinkler: 'Sprinkler',
   hay: 'Hay bale', tumbleweed: 'Tumbleweed', pothole: 'Pothole', sanddrift: 'Sand drift', rock_small: 'Small rock', rock: 'Rock',
   cactus_road: 'Road cactus', spikes: 'Spike strip', falling_rock: 'Falling rock', smoke_cloud: 'Smoke cloud', oil_slick: 'Oil slick',

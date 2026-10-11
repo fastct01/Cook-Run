@@ -178,10 +178,11 @@ export class TrafficSystem {
       if (z0 < rv.z + C.spawnAhead[0] - 200 && sim.t > 0.5) continue; // stale segment (e.g. after a big teleport)
       const biome = road.biome(z0);
       const kinds = (biome.traffic || []).filter((k) => k !== 'rival');
-      const p = (biome.trafficPer100m || 0) * 0.1;
+      const dens = C.densityMult ?? 1;   // difficulty lever (rules.sim.traffic.densityMult)
+      const p = (biome.trafficPer100m || 0) * 0.1 * dens;
       const roll = rng.float(), zz = z0 + rng.float(0, 10), dirRoll = rng.float(), rankRoll = rng.float();
       const kRoll = rng.float(), sRoll = rng.float();
-      if (!kinds.length || roll >= p || this.cars.length >= C.maxCars) continue;
+      if (!kinds.length || roll >= p || this.cars.length >= Math.round(C.maxCars * Math.max(1, dens))) continue;
       const dir = dirRoll < C.oncomingShare ? -1 : 1;
       const n = road.lanesPerDir(zz);
       const rank = Math.min(n - 1, Math.floor(rankRoll * n));

@@ -11,6 +11,8 @@ import * as THREE from 'three';
 import { ATLAS } from './textures.js';
 import { buildRigProto, RigInstance } from './rig.js';
 import { XATLAS } from './ents/atlas.js';
+import { RookRoofView } from './ents/rookRoof.js';   // R3-DEFEND: Rook + guns on the roof
+import { GunFx, dirOf } from './ents/gunfx.js';       // R3-DEFEND: tracers, sparks, casings
 
 const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _v = new THREE.Vector3(), _v2 = new THREE.Vector3();
 const _e = new THREE.Euler();
@@ -208,6 +210,7 @@ export class RvView {
     }
     // [expansion] Doc on the roof
     try { this._roofUpdate(snap, dt); } catch (e) { if (!this._roofWarned) { this._roofWarned = true; console.error('[rv] roof', e); } }
+    try { if (this.outer.parent) GunFx.of(this.outer.parent, this.particles).update(dt); } catch (e) { if (!this._gfxWarned) { this._gfxWarned = true; console.error('[rv] gun fx', e); } }   // R3-DEFEND
   }
 
   // ── [expansion] Doc on the roof, seen from outside (snap.rv.roofDoc) ─────
@@ -245,6 +248,7 @@ export class RvView {
   }
   _roofUpdate(snap, dt) {
     const rv = snap.rv;
+    if (rv.roofRook !== undefined || (snap.roof && 'gun' in snap.roof)) { this._rookRoofUpdate(snap, dt); return; }   // R3-DEFEND: Rook + guns replace Doc + hose
     const roof = (snap.stop && snap.stop.roof) || {};
     const want = this.roofDocOverride != null ? !!this.roofDocOverride : !!rv.roofDoc;
     const expansion = rv.roofDoc !== undefined || this.roofDocOverride != null;
@@ -371,6 +375,41 @@ export class RvView {
       }
     }
     if (seen.size > 64) for (const [k, t] of seen) if (this.time - t > 3) seen.delete(k);
+  }
+
+  // ── R3-DEFEND: Rook on the roof (snap.rv.roofRook / snap.roof = sim/roof.js state()) ─────────────
+  // The roof props stay (hatch, hose reel, tank); Doc never climbs up. The hatch lid opens while Rook is
+  // up or climbing; RookRoofView (ents/rookRoof.js) draws him with the gun of snap.roof.gun aimed along
+  // aimYaw/aimPitch, and the thrown devices from snap.roof.fx still draw here.
+  _rookRoofUpdate(snap, dt) {
+    const rv = snap.rv, roof = snap.roof || (snap.stop && snap.stop.roof) || {};
+    const r = this.roof || this._roofSetup();
+    r.group.visible = true;
+    const mask = this.inst.rig.mesh.layers.mask;
+    if (r.mask !== mask) { r.mask = mask; r.group.traverse((o) => { o.layers.mask = mask; }); }
+    const want = !!(roof.active || rv.roofRook);
+    r.lid += ((want ? 1 : 0) - r.lid) * Math.min(1, dt * 5);
+    r.hatch.rig.setRot('lid', _q.setFromEuler(_e.set(1.6 * r.lid, 0, 0, 'YXZ')));
+    r.hatch.rig.root.visible = r.lid > 0.02;
+    r.docPivot.visible = false;
+    r.hose.rig.setScale('nozzle', 1);
+    for (const p of [r.hatch, r.hose, r.tank]) p.rig.commit();
+    if (!this.rook) this.rook = new RookRoofView(this, this.lib, this.particles);
+    this.rook.update(snap, roof, dt, r.group);
+    const van = this.suppressGlow || this.inst.root.visible === false;
+    if (!van) this._roofDevices(snap, roof, dt);
+  }
+  /** R3-DEFEND: snapshot events forwarded by WorldView._event (both roles). */
+  event(ev, snap) {
+    if (!ev || !ev.type) return;
+    if (ev.type === 'shot' || ev.type === 'reload') {
+      if (!this.rook) this.rook = new RookRoofView(this, this.lib, this.particles);
+      this.rook.event(ev);
+    } else if (ev.type === 'copShot' && ev.hit && Number.isFinite(ev.tx) && this.outer.parent) {
+      // a cop's round hits the RV / the roof next to Rook: sparks (never anything on a person)
+      GunFx.of(this.outer.parent, this.particles).impact(ev.tx, ev.ty, ev.tz, 'rv', { dir: dirOf(ev.x, ev.y, ev.z, ev.tx, ev.ty, ev.tz) });
+    }
+    void snap;
   }
 
   // ── [wreck] the RV blows up ─────────────────────────────────────────────
@@ -601,5 +640,6 @@ export class RvView {
     this._wreckDispose();
     this.outer.removeFromParent(); this.rig.dispose();
     if (this.roof) for (const p of [this.roof.hatch, this.roof.hose, this.roof.tank, this.roof.doc]) p.rig.dispose();
+    if (this.rook) this.rook.dispose();   // R3-DEFEND
   }
 }

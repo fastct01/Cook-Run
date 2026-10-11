@@ -2,9 +2,13 @@
 //   node scripts/test-e2e.mjs            (starts its own server on a random port)
 //   node scripts/test-e2e.mjs --url ws://localhost:3000/ws
 //
-// Host  = GameSim + Autopilot, sends snapshots at rules.net.snapshotHz (sim time).
+// Host  = GameSim + Autopilot, sends snapshots at rules.net.snapshotHz (sim time). Round 3: at every
+//         supply stop the host's driver sends DCMD defend {ai: true} (the sim's AI Rook defends the RV).
 // Guest = real CookLab driven by a bot that plays each minigame through its pointer API,
-//         sends LabState at rules.net.labHz and commands immediately.
+//         sends LabState at rules.net.labHz and commands immediately. Round 3: the cook does the shop
+//         runs — on stop.state 'shopping' with stop.doc 'in' it sends CMD.shopEnter, reports its
+//         progress in LabState.shop, and ~20 s later sends CMD.shopDone {score: 0.8}.
+// Difficulty: E2E_DIFFICULTY env, else the START payload's difficulty, else 'hard'.
 // Both run on a shared virtual clock at TIME_SCALE× real time; all traffic goes through the
 // actual Node room server + relay (same code path as two browsers).
 import { spawn } from 'node:child_process';
@@ -15,14 +19,16 @@ import { GameSim } from '../public/js/sim/GameSim.js';
 import { Autopilot } from '../public/js/sim/autopilot.js';
 import { CookLab } from '../public/js/cook/CookLab.js';
 import { NetClient } from '../public/js/net/NetClient.js';
-import { GM, EV } from '../public/js/shared/protocol.js';
+import { GM, EV, CMD } from '../public/js/shared/protocol.js';
+import { withDifficulty, normDifficulty } from '../public/js/shared/difficulty.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const argUrl = process.argv.includes('--url') ? process.argv[process.argv.indexOf('--url') + 1] : null;
 const TIME_SCALE = 6;   // 15 Hz × 6 = 90 msg/s, under the server's 120 msg/s flood limit
 const STEP = 1 / 60;
-const data = await loadDataNode();
-const SNAP_DT = 1 / data.rules.net.snapshotHz, LAB_DT = 1 / data.rules.net.labHz;
+const rawData = await loadDataNode();
+let data = rawData;
+const SNAP_DT = 1 / rawData.rules.net.snapshotHz, LAB_DT = 1 / rawData.rules.net.labHz;
 
 let fails = 0;
 const ok = (c, m, extra = '') => { console.log(`  ${c ? 'PASS' : 'FAIL'}  ${m}${extra ? ' — ' + extra : ''}`); if (!c) fails++; };
@@ -69,12 +75,16 @@ ok(hostStart.seed === guestStart.seed, 'both players got START with the same see
 // The server's random seed was verified above; the game itself runs on a fixed route seed because the
 // bot driver loses on ~1 seed in 13 (it can't U-turn), and this test is about networking, not bot skill.
 const seed = (process.env.E2E_SEED ? +process.env.E2E_SEED : data.route.defaultSeed) >>> 0;
+const difficulty = normDifficulty(process.env.E2E_DIFFICULTY ?? hostStart.difficulty ?? 'hard');
+data = withDifficulty(rawData, difficulty);   // main.js does the same once per session
+console.log(`  difficulty: ${difficulty}${hostStart.difficulty ? ` (START says ${hostStart.difficulty})` : ''}`);
 
 // ── host: sim + autopilot ────────────────────────────────────────────────────
 const sim = new GameSim(data, { seed });
-// 40 km route: the host's driver skips the garage tutorial and plays each supply-stop shop
-// challenge as a stand-in (DCMD shopDone, score 0.8, after 25 s) — both host-local, like main.js.
-const pilot = new Autopilot(data, { seed, sim, onDriverCommand: (c) => sim.applyDriverCommand(c), autoShop: 25 });
+// 40 km route: the host's driver skips the garage tutorial and, at every supply stop, sends the
+// AI Rook onto the roof (DCMD defend {ai: true}) — host-local, like main.js. The shop run is Doc's.
+const pilot = new Autopilot(data, { seed, sim, onDriverCommand: (c) => sim.applyDriverCommand(c) });
+let docShopSeen = 0;
 let labMsgs = 0, cmdMsgs = 0;
 host.onGame((m) => {
   if (m.k === GM.LAB) { labMsgs++; sim.setLabState(m.l); }
@@ -127,6 +137,33 @@ function playStep(g, i) {
     default: break;
   }
 }
+// Doc's shop run (Round 3): jump out at a stop that is 'shopping' with Doc inside, report progress in
+// LabState.shop, finish ~20 s (virtual) later with score 0.8.
+const SHOP_SECONDS = 20;
+const shopRun = { stopId: null, t0: 0, sent: new Set(), enters: 0, dones: 0 };
+function shopBot(vtNow) {
+  const st = lastSnap?.stop;
+  if (st && st.state === 'shopping' && st.doc === 'in' && shopRun.stopId !== st.id && !shopRun.sent.has(st.id)) {
+    shopRun.stopId = st.id; shopRun.t0 = vtNow; shopRun.enters++;
+    guest.sendGame({ k: GM.CMD, c: { type: CMD.SHOP_ENTER, stopId: st.id } });
+  }
+  if (shopRun.stopId) {
+    const el = vtNow - shopRun.t0;
+    const cur = lastSnap?.stop;
+    if (!cur || cur.id !== shopRun.stopId || (cur.state !== 'shopping' && cur.state !== 'parked')) {
+      // the stop went away under us (driven off / timed out): run back
+      shopRun.sent.add(shopRun.stopId); shopRun.stopId = null; lab.setShopProgress(null); return;
+    }
+    if (el >= SHOP_SECONDS) {
+      guest.sendGame({ k: GM.CMD, c: { type: CMD.SHOP_DONE, stopId: shopRun.stopId, score: 0.8 } });
+      shopRun.sent.add(shopRun.stopId); shopRun.dones++; shopRun.stopId = null;
+      lab.setShopProgress(null);
+    } else {
+      lab.setShopProgress({ stopId: shopRun.stopId, label: `Shop run ${Math.min(3, Math.floor(el / SHOP_SECONDS * 3))}/3`, frac: el / SHOP_SECONDS, tLeft: SHOP_SECONDS - el });
+    }
+  }
+}
+
 const cooked = [];
 function cookBrain() {
   if (lab.cookDown) return;
@@ -153,14 +190,16 @@ while (!ended && vt < MAX_VT) {
   const frame = 0.1; // 100 ms of game time per tick
   for (let k = 0; k < frame / STEP; k++) {
     vt += STEP;
-    sim.step(pilot.update(sim.snapshot()), STEP);
+    const hs = sim.snapshot();
+    if (hs.stop && hs.stop.docShop) docShopSeen++;
+    sim.step(pilot.update(hs), STEP);
     snapAcc += STEP;
     if (snapAcc >= SNAP_DT) { snapAcc -= SNAP_DT; host.sendGame({ k: GM.SNAP, s: sim.netSnapshot() }); }
     // guest
     playStep(lab.current, labI++);
     lab.update(STEP);
     labAcc += STEP;
-    if (labAcc >= LAB_DT) { labAcc -= LAB_DT; guest.sendGame({ k: GM.LAB, l: lab.getLabState() }); cookBrain(); }
+    if (labAcc >= LAB_DT) { labAcc -= LAB_DT; shopBot(vt); guest.sendGame({ k: GM.LAB, l: lab.getLabState() }); cookBrain(); }
     if (sim.phase === 'won' || sim.phase === 'lost') {
       host.sendGame({ k: GM.SNAP, s: sim.netSnapshot() });
       host.sendGame({ k: GM.END, result: sim.result });
@@ -177,6 +216,7 @@ console.log(`\n  game: ${sim.phase} ${r.reason ? '(' + r.reason + ')' : ''} in $
 console.log(`  product ${r.units} bags @ ${Math.round((r.quality || 0) * 100)}% · payout $${r.payout} · points ${r.points} · ${r.stars}★ · max heat ${r.maxStars ?? '?'}★`);
 console.log(`  traffic: host→cook ${snaps} snapshots (avg ${(bytes / Math.max(1, snaps) / 1024).toFixed(2)} KB, max ${(maxBytes / 1024).toFixed(2)} KB) · cook→host ${labMsgs} lab states, ${cmdMsgs} commands`);
 console.log(`  cook batches: ${cooked.join(', ') || '(none)'}`);
+console.log(`  Doc's shop runs: ${shopRun.enters} shopEnter, ${shopRun.dones} shopDone · host frames with stop.docShop: ${docShopSeen} · AI Rook defend sent ${pilot.stats.defendSent}× · stops looted ${sim.stops.lootedCount()} · cop shots ${sim.cops.fireStats.shots} (hits ${sim.cops.fireStats.hits})`);
 console.log(`  events seen by the cook: ${Object.entries(seen).map(([k, v]) => `${k}:${v}`).join(' ')}\n`);
 
 // Networking is what this test checks. The game outcome depends on the bots and on real-time message
@@ -188,8 +228,11 @@ ok(labMsgs > vt * data.rules.net.labHz * 0.8, 'host received lab states at ~labH
 ok((seen[EV.RECIPE_OK] || 0) >= 2, 'cook\'s recipe requests approved by the host sim', `${seen[EV.RECIPE_OK] || 0} recipeOk`);
 ok((r.units || 0) + (sim.snapshot().inv?.units || 0) >= 2 || (seen[EV.RECIPE_OK] || 0) >= 2, 'product cooked by the remote cook was credited by the host', `${r.units} bags`);
 ok((seen[EV.STOP_DONE] || 0) >= 4, 'supply stop events reached the cook', `${seen[EV.STOP_DONE] || 0}`);
+ok(shopRun.enters >= 4 && (seen[EV.DOC_OUT] || 0) >= 4, 'Doc did the shop runs from the cook client (CMD.shopEnter → EV.DOC_OUT)', `${shopRun.enters} enters, docOut ${seen[EV.DOC_OUT] || 0}`);
+ok(docShopSeen > 0, 'LabState.shop from the cook reached the host (snapshot stop.docShop)', `${docShopSeen} frames`);
+ok((seen[EV.STOP_COPS] || 0) >= 1 && pilot.stats.defendSent >= 1, 'cops were sent to the stops and the AI Rook was sent up', `stopCops ${seen[EV.STOP_COPS] || 0}, defend ${pilot.stats.defendSent}`);
 if (r.won) ok((seen[EV.COPS_GAVE_UP] || 0) >= 1 && (seen[EV.LANDED] || 0) >= 1, 'cook saw the canyon jump + cops giving up', `landed ${seen[EV.LANDED] || 0}, copsGaveUp ${seen[EV.COPS_GAVE_UP] || 0}`);
-ok(endResult && endResult.won === r.won && endResult.points === r.points, 'END message relayed to the cook (same result on both sides)');
+ok(endResult && endResult.won === r.won && endResult.points === r.points && endResult.difficulty === difficulty, 'END message relayed to the cook (same result on both sides, with the difficulty)');
 ok((seen.end || 0) >= 1, 'end event also inside a snapshot (fallback path)');
 ok(maxBytes < 64 * 1024, 'every snapshot fits under the 64 KB relay limit', `${(maxBytes / 1024).toFixed(1)} KB`);
 

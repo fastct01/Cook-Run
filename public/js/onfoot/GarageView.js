@@ -3,42 +3,58 @@
 //
 //   const gv = new GarageView(view, data, { role: 'driver'|'cook', hudRoot, onSkip, solo });
 //   gv.update(dt, snap)            every frame (driver: sim.snapshot(); cook: the latest received snapshot)
-//   gv.onKey(e, down) → bool       feed keydown/keyup while snap.phase === 'garage' (WASD/arrows, Shift, E/Enter, Space = jump)
+//   gv.onKey(e, down) → bool       feed keydown/keyup while snap.phase === 'garage' (WASD/arrows, Shift, E/Enter, Space = jump,
+//                                  Esc = skip the tutorial — host only, i.e. when onSkip is set)
 //   gv.consumeInput()              driver: → { moveX, moveZ, run, interact, interactHeld, jump } (world space) — once per sim step
-//   gv.pollCommands(dt)            cook:   → CMD objects to send now (avatarMove ≈15 Hz, avatarAct / avatarJump on press)
+//   gv.pollCommands(dt)            cook:   → CMD objects to send now (avatarMove ≈15 Hz while moving OR while E is held, with
+//                                  hold: 0|1 — Suit up is "hold E"; avatarAct / avatarJump on press)
 //   gv.cameraYaw                   world yaw the camera looks along (forward = (sin, cos)); WASD is relative to it
 //   gv.finished                    true once the phase left 'garage' and the fade-out is over → destroy()
 //   gv.destroy()
 //
-// Adds to view.scene, at the garage frame (sim/garage.js garageFrame): the `garage_interior` model,
-// Rook (`driver`) + Doc (`cook`) with walk cycles / carry poses, the items reflecting snap.garage, glowing
+// Adds to view.scene, at the garage frame (sim/garage.js garageFrame): the `garage_interior` model dressed as
+// Doc's home lab (R3-GARAGE: chem bench, fume hood, drums, gas cylinders, reagent shelf, recipe whiteboard,
+// element poster, safety station, suit rack — assets/expansion/r3-garage-layout.js placements),
+// Rook (`driver` = young Rook) + Doc (`cook`) with walk cycles / carry poses — swapped for the suited models
+// (`driver` v1 / `crew_suited` v1) once they suit up (the rack loses that suit) — the items reflecting snap.garage, glowing
 // target markers + a bobbing arrow over YOUR next target, warm interior lights, and a third-person camera
 // behind YOUR avatar (view.setCameraController). While it runs the `rooks_garage` exterior is hidden
 // (its walls/props overlap the interior); it is shown again on release.
+// HUD (R3-GARAGE, dark glass, docs/r3/ui/Garage-Exit.png): 7-step checklist top-left, partner + skip chips
+// top-right, instruction card bottom-centre (hold ring for Suit up / the crank), name tags, E bubble; once the
+// engine catches the driver gets an "Engine's running · Straight out, then right" chip that outlives the view
+// (~9 s, into the drive). The way-out floor chevrons + floating arrow are world objects (render/world/
+// startDistrict.js ExitArrows via StructuresView), so they survive GarageView's exit.
 // Unity: GarageView MonoBehaviour + a Cinemachine FreeLook on the local avatar; UI on a Canvas.
 // ─────────────────────────────────────────────────────────────────────────────
 import * as THREE from 'three';
 import { createModel, cloneInstanceMaterials } from '../assets/index.js';
 import { LAYOUT, STEPS, garageFrame, moveAvatar } from '../sim/garage.js';
+import { R3_GARAGE_PLACEMENTS } from '../assets/expansion/r3-garage-layout.js';
 import { Track } from '../sim/track.js';
 import { CMD } from '../shared/protocol.js';
 import { jumpY, tryJump, stepJump, resetJump } from '../shared/jump.js';
 import { Avatar, PoseSmoother } from './avatar.js';
-import { OnfootHud, el, keycaps } from './hud.js';
+import { OnfootHud, el, keycaps, esc, icon, ICONS } from './hud.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _t = new THREE.Vector3();
 
-const STEP_LABEL = { markers: 'Find your spot', grab: 'Grab the gear', load: 'Load the crate', door: 'Open the door', board: 'All aboard', crank: 'Start her up' };
+const STEP_LABEL = { markers: 'Find your spot', suit: 'Suit up', grab: 'Grab the gear', load: 'Load the crate', door: 'Open the door', board: 'All aboard', crank: 'Start her up' };
+const STEP_WHO = { markers: 'both', suit: 'both', grab: 'both', load: 'doc', door: 'rook', board: 'both', crank: 'rook' };
+// partner chip: [status, detail]
 const PARTNER = {
-  rook: { markers: 'heading to the key rack', wait: 'waiting for you', keys: 'grabbing the keys', plug: 'unplugging the charger', button: 'opening the garage door', board: 'getting in the cab', waitIn: 'in the driver\'s seat', crank: 'cranking the engine' },
-  doc: { markers: 'heading to his desk', wait: 'waiting for you', notebook: 'grabbing the notebook', crate: 'going for the crate', carry: 'hauling the crate', board: 'climbing in the back', waitIn: 'in the back of the RV', crank: 'in the back of the RV' },
+  rook: { markers: ['Heading', 'to the key rack'], wait: ['Waiting', 'for you'], suit: ['Suiting up', 'at the rack'], keys: ['Grabbing', 'the keys'], plug: ['Unplugging', 'the charger'], button: ['Opening', 'the garage door'], board: ['Getting in', 'the cab'], waitIn: ['In the cab', 'at the wheel'], crank: ['Cranking', 'the engine'], done: ['At the wheel', 'pulling out'] },
+  doc: { markers: ['Heading', 'to his desk'], wait: ['Waiting', 'for you'], suit: ['Suiting up', 'at the rack'], notebook: ['Grabbing', 'the notebook'], crate: ['Going for', 'the crate'], carry: ['Hauling', 'the crate'], board: ['Climbing in', 'the side door'], waitIn: ['Aboard', 'in the lab'], crank: ['Aboard', 'in the lab'], done: ['Aboard', 'in the lab'] },
 };
 const FB_TEXT = {
-  marker: '✓', keys: 'Keys ✓', notebook: 'Notebook ✓', pickup: 'Oof — heavy!', drop: 'Put it down', load: 'Crate loaded ✓',
+  marker: '✓', suit: 'Suited up ✓', keys: 'Keys ✓', notebook: 'Notebook ✓', pickup: 'Oof — heavy!', drop: 'Put it down', load: 'Crate loaded ✓',
   plug: 'Unplugged ✓', button: 'Door opening…', board: 'In!', caught: 'She caught!', engine: 'ENGINE ON',
 };
+// the suited models (R3-GARAGE): young Rook in the suit (= rook_young v1) and Doc in the suit
+const SUITED = { rook: ['driver', 1], doc: ['crew_suited', 1] };
+const CASUAL = { rook: ['driver', 0], doc: ['cook', 0] };
 const TINT = { rook: new THREE.Color('#ffc65a'), doc: new THREE.Color('#ff8a3a') };
 
 export class GarageView {
@@ -100,16 +116,29 @@ export class GarageView {
     root.add(this.arrow);
     this.arrowArrow = this.arrow.getObjectByName('arrow');
     for (const n of ['ring', 'beam']) { const o = this.arrow.getObjectByName(n); if (o) o.visible = false; }   // just the arrow: the floor marker is the ring
-    // warm interior lights under the tube fixtures (no shadows)
+    // R3-GARAGE: Doc's home lab along the walls (chemistry + protective gear; colliders in sim LAYOUT.boxes)
+    this.props = [];
+    for (const p of R3_GARAGE_PLACEMENTS) {
+      const o = createModel(p.kind, p.variant);
+      o.position.set(p.pos[0], p.pos[1], p.pos[2]); o.rotation.y = p.rotY;
+      o.traverse((m) => { if (m.isMesh) { m.castShadow = m.castShadow !== false && !(m.material && m.material.transparent); m.receiveShadow = true; } });
+      root.add(o); this.props.push(o);
+      if (p.kind === 'suit_rack') this.rack = o;
+    }
+    this.rackSuits = this.rack ? [this.rack.getObjectByName('suit_0'), this.rack.getObjectByName('suit_1')] : [null, null];
+    this.rackRest = this.rackSuits.map((o) => (o ? o.rotation.x : 0));
+    // warm interior lights under the tube fixtures (no shadows) + one over the lab wall (R3-GARAGE)
     this.lights = [];
-    for (const [x, z] of [[-4.5, -1.8], [-0.5, 3.6], [5.2, -1.0]]) {
-      const L = new THREE.PointLight('#ffd9a0', 11, 12, 1.4);
+    for (const [x, z, i] of [[-4.5, -1.8, 11], [-0.5, 3.6, 11], [5.2, -1.0, 11], [4.6, -5.2, 9]]) {
+      const L = new THREE.PointLight('#ffd9a0', i, 12, 1.4);
       L.position.set(x, 4.7, z);
       root.add(L); this.lights.push(L);
     }
 
     // ── avatars ──────────────────────────────────────────────────────────
-    this.av = { rook: new Avatar(createModel('driver'), { name: 'rook' }), doc: new Avatar(createModel('cook'), { name: 'doc' }) };
+    this.av = { rook: new Avatar(createModel(...CASUAL.rook), { name: 'rook' }), doc: new Avatar(createModel(...CASUAL.doc), { name: 'doc' }) };
+    this.suited = { rook: false, doc: false };
+    this.fx = [];   // short-lived swap puffs
     for (const who of ['rook', 'doc']) {
       const s = LAYOUT.start[who];
       this.av[who].set({ x: s.x, z: s.z, yaw: s.yaw });
@@ -132,20 +161,20 @@ export class GarageView {
     this._bindPointer();
 
     // ── HUD ──────────────────────────────────────────────────────────────
-    this.hud = new OnfootHud(hudRoot || view.canvas?.parentElement || document.body, { kind: 'garage', role: this.role });
-    const top = this.hud.top;
-    this.titleEl = el('div', 'ofg-title', top, `<b>ROOK'S GARAGE</b><span>6:36 AM · load up and roll out</span>`);
-    this.stepsEl = el('ol', 'ofg-steps', top);
-    this.stepEls = STEPS.map((id, i) => el('li', '', this.stepsEl, `<i>${i + 1}</i><span>${STEP_LABEL[id]}</span>`));
-    this.partnerEl = el('div', 'ofg-partner', this.hud.bottom);
-    this.tags = { rook: el('div', 'ofg-tag ofg-tag--rook', this.hud.root, 'ROOK'), doc: el('div', 'ofg-tag ofg-tag--doc', this.hud.root, 'DOC') };
-    this.tags[this.me].classList.add('me');
-    this.ebubble = el('div', 'ofg-ebubble', this.hud.root, '<kbd>E</kbd>');
+    this.hudRoot = hudRoot || view.canvas?.parentElement || document.body;
+    this.hud = new OnfootHud(this.hudRoot, { kind: 'garage', role: this.role });
+    // checklist (top-left, under the main HUD's Wanted panel) — Garage-Exit.png
+    this.list = this.hud.checklist({ label: 'Rook\u2019s garage', title: 'Get her rolling', steps: STEPS.map((id) => ({ id, label: STEP_LABEL[id], who: STEP_WHO[id] })) });
+    // partner chip + skip (top-right)
+    this.partner = this.hud.chip(this.hud.right, 'ofg-partner');
     if (this.canSkip) {
-      this.skipBtn = el('button', 'ofg-skip', this.hud.root, 'Skip tutorial <kbd>⏭</kbd>');
+      this.skipBtn = el('button', 'ofc-chip g-panel ofg-skip', this.hud.right, 'Skip tutorial <kbd>Esc</kbd>');
       this.skipBtn.type = 'button';
-      this.skipBtn.addEventListener('click', () => { this.skipBtn.disabled = true; this.skipBtn.textContent = 'Skipping…'; try { this.onSkip && this.onSkip(); } catch (e) { console.error(e); } });
+      this.skipBtn.addEventListener('click', () => this._skip());
     }
+    this.tags = { rook: el('div', 'ofg-tag ofg-tag--rook', this.hud.root, 'Rook'), doc: el('div', 'ofg-tag ofg-tag--doc', this.hud.root, 'Doc') };
+    this.tags[this.me].classList.add('me');
+    this.ebubble = el('div', 'ofg-ebubble', this.hud.root, '<kbd>E</kbd><span>hold</span>');
     this.hud.fade(1, 0);
     requestAnimationFrame(() => this.hud.fade(0, 900));
     this._scanExterior(true);
@@ -153,6 +182,11 @@ export class GarageView {
 
   // ── public API ─────────────────────────────────────────────────────────────
   get cameraYaw() { return this.frame.yawToWorld(this.camYawLocal); }
+  _skip() {
+    if (!this.skipBtn || this.skipBtn.disabled) return;
+    this.skipBtn.disabled = true; this.skipBtn.innerHTML = 'Skipping\u2026';
+    try { this.onSkip && this.onSkip(); } catch (e) { console.error(e); }
+  }
 
   onKey(e, down) {
     if (this.finished || this.exiting) return false;
@@ -168,6 +202,8 @@ export class GarageView {
       if (down) this.keys.add('ACT'); else this.keys.delete('ACT');
       return true;
     }
+    // R3-GARAGE: Esc skips the tutorial (host only — the cook's Esc stays with main.js)
+    if (c === 'Escape' && this.skipBtn && this.onSkip) { if (down && !e.repeat) this._skip(); return true; }
     return false;
   }
   clearKeys() { this.keys.clear(); this._edge = false; this._jumpEdge = false; }
@@ -194,13 +230,14 @@ export class GarageView {
     if (this.finished || this.exiting) return out;
     const m = this.moveVector();
     const run = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
+    const hold = this.keys.has('ACT');   // R3-GARAGE: E held (Suit up) → avatarMove.hold, refreshed at 15 Hz like movement
     this._cmdAcc += dt;
     const moving = Math.abs(m.x) + Math.abs(m.z) > 1e-3;
-    const changed = Math.abs(m.x - this._lastSent.mx) + Math.abs(m.z - this._lastSent.mz) > 0.05 || run !== this._lastSent.run;
-    if ((moving && this._cmdAcc >= 1 / 15) || (changed && this._cmdAcc >= 1 / 30)) {
+    const changed = Math.abs(m.x - this._lastSent.mx) + Math.abs(m.z - this._lastSent.mz) > 0.05 || run !== this._lastSent.run || hold !== !!this._lastSent.hold;
+    if (((moving || hold) && this._cmdAcc >= 1 / 15) || (changed && this._cmdAcc >= 1 / 30)) {
       this._cmdAcc = 0;
-      const c = { type: CMD.AVATAR_MOVE, mx: +m.x.toFixed(3), mz: +m.z.toFixed(3), run };
-      out.push(c); this._lastSent = { mx: m.x, mz: m.z, run };
+      const c = { type: CMD.AVATAR_MOVE, mx: +m.x.toFixed(3), mz: +m.z.toFixed(3), run, hold: hold ? 1 : 0 };
+      out.push(c); this._lastSent = { mx: m.x, mz: m.z, run, hold };
     }
     if (this._edge) { this._edge = false; out.push({ type: CMD.AVATAR_ACT }); }
     if (this._jumpEdge) { this._jumpEdge = false; this._predJump = true; out.push({ type: CMD.AVATAR_JUMP }); }
@@ -230,6 +267,7 @@ export class GarageView {
       this.smooth[who].push(L.x, L.z, ly, now);
       if (fresh) this.jumpRec[who] = { jt: a.jt ?? -1, t: now };
     }
+    this._suits(dt, G);
     this._items(dt, G);
     this._predict(dt, G);
     for (const who of ['rook', 'doc']) {
@@ -258,6 +296,59 @@ export class GarageView {
   }
 
   // ── internals ─────────────────────────────────────────────────────────────
+  /** R3-GARAGE Suit up: the rack loses a suit, the avatar swaps to the suited model (with a puff). */
+  _suits(dt, G) {
+    const I = G.items || {};
+    const onRack = Array.isArray(I.suits) ? I.suits : [true, true];
+    const hold = G.suitHold || {};
+    ['rook', 'doc'].forEach((who, i) => {
+      const suit = this.rackSuits[i];
+      const suited = !!(G[who] && G[who].suited);
+      if (suit) {
+        suit.visible = onRack[i] !== false && !suited;
+        // the suit lifts toward whoever is holding E for it
+        const k = suit.visible ? Math.min(1, (hold[who] || 0) * 1.2) : 0;
+        suit.rotation.x = this.rackRest[i] - 0.28 * k + Math.sin(this.t * 9 + i) * 0.03 * k;
+      }
+      if (suited && !this.suited[who]) this._swap(who, true);
+    });
+    // puffs
+    for (let j = this.fx.length - 1; j >= 0; j--) {
+      const f = this.fx[j];
+      f.t += dt;
+      const k = Math.min(1, f.t / 0.5);
+      f.ball.scale.setScalar(0.35 + 1.25 * k); f.ball.material.opacity = 0.55 * (1 - k);
+      f.ring.scale.setScalar(0.4 + 1.6 * k); f.ring.material.opacity = 0.8 * (1 - k);
+      if (k >= 1) { f.g.removeFromParent(); f.ball.geometry.dispose(); f.ball.material.dispose(); f.ring.geometry.dispose(); f.ring.material.dispose(); this.fx.splice(j, 1); }
+    }
+  }
+  _swap(who, suited) {
+    this.suited[who] = suited;
+    const old = this.av[who];
+    const nu = new Avatar(createModel(...(suited ? SUITED : CASUAL)[who]), { name: who });
+    nu.set({ ...old.s }); nu.phase = old.phase; nu.t = old.t;
+    // whatever is in his hands / arms moves across (keys, notebook, crate)
+    for (const [a, b] of [[old.handR, nu.handR], [old.handL, nu.handL], [old.carryAnchor, nu.carryAnchor]]) for (const c of [...a.children]) b.add(c);
+    nu.root.scale.copy(old.root.scale);
+    nu.setVisible(old.visible);
+    this.root.add(nu.root);
+    old.root.removeFromParent();
+    this.av[who] = nu;
+    nu.update(0);
+    if (old.visible) this._puff(old.s.x, old.s.z);
+  }
+  _puff(x, z) {
+    const g = new THREE.Group();
+    g.position.set(x, 0, z);
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.6, 12, 8), new THREE.MeshBasicMaterial({ color: '#fff3cf', transparent: true, opacity: 0.55, depthWrite: false }));
+    ball.position.y = 1.0;
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.45, 0.62, 28).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: '#f2b90f', transparent: true, opacity: 0.8, depthWrite: false, blending: THREE.AdditiveBlending }));
+    ring.position.y = 0.03;
+    g.add(ball, ring);
+    this.root.add(g);
+    this.fx.push({ g, ball, ring, t: 0 });
+  }
+
   _predict(dt, G) {
     // cook: predict Doc locally from the keys; reconcile softly toward the host's position
     if (this.role !== 'cook') return;
@@ -330,7 +421,7 @@ export class GarageView {
     }
     // engine shake
     if (I.engine === 'cranking') this.shake = Math.max(this.shake, 0.35);
-    if (I.engine === 'on' && !this._engineOn) { this._engineOn = true; this.shake = 1; }
+    if (I.engine === 'on' && !this._engineOn) { this._engineOn = true; this.shake = 1; if (this.role === 'driver') this._exitChip(); }
     // target markers
     for (const who of ['rook', 'doc']) {
       const mk = this.markers[who]; if (!mk) continue;
@@ -374,22 +465,26 @@ export class GarageView {
     const me = this.me, other = this.other;
     const task = G.task ? G.task[me] : null;
     const near = !!(G.near && G.near[me]);
-    const sub = task === 'markers' ? '[W][A][S][D] walk · [Shift] run · [Space] jump · drag the mouse to look' : task === 'crank' && me === 'rook' && G.items.engine !== 'on' ? 'keep it held until she catches' : task === 'carry' ? 'carrying is slow — no running' : '';
-    this.hud.instruction(G.prompt ? G.prompt[me] : '', { near, who: me === 'rook' ? 'ROOK · you' : 'DOC · you', sub });
-    const otask = G.task ? G.task[other] : null;
+    const sub = task === 'markers' ? '[W][A][S][D] walk · [Shift] run · [Space] jump · drag the mouse to look' : task === 'suit' ? (near ? 'keep [E] held until the ring fills' : 'the yellow suits on the back wall, behind the RV') : task === 'crank' && me === 'rook' && G.items.engine !== 'on' ? 'keep it held until she catches' : task === 'carry' ? 'carrying is slow — no running' : '';
+    this.hud.instruction(G.prompt ? G.prompt[me] : '', { near, who: me === 'rook' ? 'Rook · you' : 'Doc · you', sub });
+    const otask = G.done ? 'done' : G.task ? G.task[other] : null;
     const oname = other === 'rook' ? 'Rook' : 'Doc';
-    const ptxt = otask ? `${oname}${G.solo && other === 'doc' ? ' (AI)' : ''} is ${PARTNER[other][otask] || '…'}` : `${oname} is ready`;
-    if (this._ptxt !== ptxt) { this._ptxt = ptxt; this.partnerEl.innerHTML = `<i class="ofg-dot ofg-dot--${other}"></i>${keycaps(ptxt)}`; }
-    // hold ring
-    if (me === 'rook' && task === 'crank') this.hud.hold(G.items.engine === 'on' ? 1 : G.hold || 0, 'E');
+    const [pv, pd] = (otask && PARTNER[other][otask]) || PARTNER[other].done;
+    this.partner.set(`${icon(other === 'doc' ? ICONS.flask : ICONS.wheel, { s: 14, sw: 2 })}<b class="ofg-who ofg-who--${other}">${oname}${G.solo && other === 'doc' ? ' · AI' : ''}</b><span class="v">${esc(pv)}</span><span class="d">${esc(pd)}</span>`);
+    // hold ring: Suit up (both) · the crank (Rook)
+    if (task === 'suit' && (near || (G.suitHold && G.suitHold[me] > 0))) this.hud.hold(G.suitHold ? G.suitHold[me] || 0 : 0, 'E');
+    else if (me === 'rook' && task === 'crank') this.hud.hold(G.items.engine === 'on' ? 1 : G.hold || 0, 'E');
     else this.hud.hold(null);
-    // steps
+    // checklist: load (Doc) ∥ door (Rook) run side by side
     const step = G.step ?? 0, comp = G.complete || {};
+    const ix = (id) => STEPS.indexOf(id);
+    const states = {};
+    let done = 0;
     STEPS.forEach((id, i) => {
-      const li = this.stepEls[i];
-      const st = comp[id] ? 'done' : i === step || (step === 2 && i === 3 && !comp.door) ? 'cur' : '';
-      if (li.dataset.st !== st) { li.dataset.st = st; li.className = st; }
+      if (comp[id]) { states[id] = 'done'; done++; }
+      else states[id] = i === step || (step === ix('load') && id === 'door') ? 'cur' : '';
     });
+    this.list.set(states, done);
     // name tags + E bubble (screen space)
     for (const who of ['rook', 'doc']) {
       const av = this.av[who], tag = this.tags[who];
@@ -401,9 +496,10 @@ export class GarageView {
     }
     const tw = G.target && G.target[me];
     if (near && tw && task !== 'crank') {
-      const L = this.frame.toLocal(tw.x, tw.z);
-      const scr = this._screenOf(_v2.set(L.x, 1.75, L.z), 0);
-      if (scr) { this.ebubble.style.display = 'block'; this.ebubble.style.transform = `translate(${scr.x.toFixed(1)}px, ${scr.y.toFixed(1)}px) translate(-50%, -50%)`; }
+      const L = task === 'suit' ? { x: LAYOUT.use.suit[me].x, z: LAYOUT.suitRack.z + 0.35 } : this.frame.toLocal(tw.x, tw.z);
+      const scr = this._screenOf(_v2.set(L.x, task === 'suit' ? 2.3 : 1.75, L.z), 0);
+      this.ebubble.classList.toggle('hold', task === 'suit');
+      if (scr) { this.ebubble.style.display = 'flex'; this.ebubble.style.transform = `translate(${scr.x.toFixed(1)}px, ${scr.y.toFixed(1)}px) translate(-50%, -50%)`; }
       else this.ebubble.style.display = 'none';
     } else this.ebubble.style.display = 'none';
     if (this.skipBtn && G.done) this.skipBtn.style.display = 'none';
@@ -422,19 +518,46 @@ export class GarageView {
     return { x: (_t.x * 0.5 + 0.5) * r.width + (r.left - hr.left), y: (-_t.y * 0.5 + 0.5) * r.height + (r.top - hr.top) };
   }
 
+  /** R3-GARAGE: "Engine's running · Straight out, then right" (driver). Lives in the HUD root, not in the
+   *  GarageView overlay, so it stays up into the first seconds of the drive; removes itself after ~9 s. */
+  _exitChip() {
+    if (this._exitEl) return;
+    const c = this._exitEl = el('div', 'ofx-exit', this.hudRoot,
+      `<div class="ofc-chip g-panel">${icon(ICONS.turnRight, { s: 14, sw: 2.2, c: '#F2B90F' })}<span class="ofc-k">Engine\u2019s running</span><span class="v">Straight out, then right</span></div>`);
+    const kill = () => { if (c.parentNode) c.remove(); };
+    this._exitTimer = setTimeout(kill, 9000);
+  }
+
   _camera(dt, camera) {
     if (this.finished) return;
     camera.layers.enable(1);   // the RV body layer (the cook's 'rear' mode hides it); restored on release
     const G = this.snap && this.snap.garage;
     const av = this.av[this.me];
     const meIn = G && G[this.me] && G[this.me].inRv;
-    // focus: my avatar; once inside the RV, the RV's flank
-    const fx = meIn ? (this.me === 'rook' ? LAYOUT.use.driverDoor.x : LAYOUT.use.sideDoor.x) : av.s.x;
-    const fz = meIn ? (this.me === 'rook' ? LAYOUT.use.driverDoor.z : LAYOUT.use.sideDoor.z) : av.s.z;
+    // focus: my avatar; once inside the RV, the RV's flank; R3-GARAGE: once the engine turns over, the way out
+    // (the RV's nose, the floor chevrons through the roll-up door and the OUT arrow), seen over the lift bay
+    const exitView = !!(meIn && G && G.complete && G.complete.board);
+    if (exitView && !this._exitView) { this._exitView = true; if (!this._drag) this.camYawLocal = 0.72; }   // cut; the boom glides over
+    const fx = exitView ? 3.4 : meIn ? (this.me === 'rook' ? LAYOUT.use.driverDoor.x : LAYOUT.use.sideDoor.x) : av.s.x;
+    const fz = exitView ? 6.4 : meIn ? (this.me === 'rook' ? LAYOUT.use.driverDoor.z : LAYOUT.use.sideDoor.z) : av.s.z;
+    const dist = exitView ? 7.2 : this.camDist;
     // lazy follow: swing behind me while I walk away from the camera
     if (!this._drag && !meIn && av.s.speed > 1.0) {
       const d = wrap(av.s.yaw - this.camYawLocal);
       if (Math.abs(d) < 1.25) this.camYawLocal += d * Math.min(1, dt * 0.9);
+    }
+    // R3-GARAGE: swing round the tall things (the parked RV, the lift) rather than only rising over them —
+    // e.g. the suit rack behind the RV gets framed from the open end of the corridor
+    if (!this._drag && !meIn) {
+      const free = (yw) => !blocked(clamp(fx - Math.sin(yw) * this.camDist, -9.1, 9.1), this.camH, clamp(fz - Math.cos(yw) * this.camDist, -7.05, 6.55), fx, 1.25, fz);
+      if (this._swingTo == null && !free(this.camYawLocal)) {
+        for (const off of [0.35, -0.35, 0.7, -0.7, 1.05, -1.05, 1.4, -1.4]) if (free(this.camYawLocal + off)) { this._swingTo = this.camYawLocal + off; break; }
+      }
+      if (this._swingTo != null) {
+        const d = wrap(this._swingTo - this.camYawLocal);
+        this.camYawLocal += d * Math.min(1, dt * 2.2);
+        if (Math.abs(d) < 0.04 || av.s.speed > 2.2) this._swingTo = null;
+      }
     }
     const yaw = this.camYawLocal;
     const fwdX = Math.sin(yaw), fwdZ = Math.cos(yaw);
@@ -442,12 +565,12 @@ export class GarageView {
     // occlusion: rise over the RV / lift when they sit between the camera and me
     let lift = 0;
     for (let h = 0; h <= 3.2; h += 0.4) {
-      const cx = fx - fwdX * this.camDist, cz = fz - fwdZ * this.camDist, cy = this.camH + h;
+      const cx = fx - fwdX * dist, cz = fz - fwdZ * dist, cy = this.camH + h;
       if (!blocked(cx, cy, cz, look.x, look.y, look.z)) { lift = h; break; }
       lift = h;
     }
     this.camLift += (lift - this.camLift) * (1 - Math.exp(-dt * 3));
-    let cx = fx - fwdX * this.camDist, cz = fz - fwdZ * this.camDist;
+    let cx = fx - fwdX * dist, cz = fz - fwdZ * dist;
     // stay inside the room (wall-backed furniture and the roll-up door would block from outside):
     // squeezed against a wall, the boom rises instead so the view stays open
     const ux = clamp(cx, -9.1, 9.1), uz = clamp(cz, -7.05, 6.55);
@@ -532,7 +655,9 @@ export class GarageView {
     this.root.removeFromParent();
     for (const m of Object.values(this.mats || {})) { try { m.dispose(); } catch (e) { /* shared */ } }
     for (const L of this.lights) L.dispose?.();
-    this.hud.destroy();
+    for (const f of this.fx) { f.ball.geometry.dispose(); f.ball.material.dispose(); f.ring.geometry.dispose(); f.ring.material.dispose(); }
+    this.fx = [];
+    this.hud.destroy();   // the exit chip (if any) lives on in the HUD root and removes itself
   }
 }
 
@@ -547,7 +672,7 @@ export function worldMove(f, r, yaw) {
 }
 
 // 3D occluders (interior-local AABBs: [x0,x1,y0,y1,z0,z1]) the camera rises over
-const OCC = [[2.65, 5.35, 0, 3.5, -4.55, 4.15], [-6.2, -2.2, 1.2, 2.7, 1.3, 5.9]];
+const OCC = [[2.65, 5.35, 0, 3.5, -4.55, 4.15], [-6.2, -2.2, 1.2, 2.7, 1.3, 5.9], [2.05, 3.30, 0, 3.3, -7.0, -6.23]];   // + R3-GARAGE fume hood
 function blocked(ax, ay, az, bx, by, bz) {
   for (const b of OCC) {
     let t0 = 0, t1 = 1;
