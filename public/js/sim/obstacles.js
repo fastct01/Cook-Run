@@ -105,7 +105,7 @@ export class ObstacleSystem {
     const rng = new Rng(hashSeed(sim.seed, ci));
     const biome = road.biome(z0 + size / 2);
     const kinds = biome.obstacles || [];
-    const n = (biome.obstaclePer100m || 0) * size / 100;
+    const n = (biome.obstaclePer100m || 0) * size / 100 * (sim.cfg.obstacles.densityMult ?? 1);   // difficulty lever
     const count = Math.floor(n) + (rng.float() < n - Math.floor(n) ? 1 : 0);
     const solids = [];
     for (let i = 0; i < count; i++) {

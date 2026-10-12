@@ -13,6 +13,7 @@ export class CoolGame extends Minigame {
   constructor(params, ctx) {
     super(params, ctx);
     this.duration = params.duration ?? 6;
+    this.centre = CENTRE * this.zoneScale;   // difficulty: |tilt| that counts as "centred" (presenters: g.centre)
     this.elapsed = 0;
     this.centred = 0;
     this.quality = 0;
@@ -34,7 +35,7 @@ export class CoolGame extends Minigame {
     if (this.done) return 'Cooled and set';
     if (this.maxedFor > 0.2) return 'It’s tipping — move toward the bubble!';
     if (!this.started) return 'Move left/right to keep the bubble centred';
-    return Math.abs(this.tilt) < CENTRE ? 'Steady… keep it level' : 'Chase the bubble back to the middle';
+    return Math.abs(this.tilt) < this.centre ? 'Steady… keep it level' : 'Chase the bubble back to the middle';
   }
   get cursor() { return 'ew-resize'; }
 
@@ -69,9 +70,9 @@ export class CoolGame extends Minigame {
     if (this.done || this.failed) return;
     this.elapsed += dt;
     const ab = Math.abs(this.tilt);
-    const q = clamp(1 - Math.max(0, ab - CENTRE * 0.5) / (MAX_TILT - CENTRE * 0.5), 0, 1);
+    const q = clamp(1 - Math.max(0, ab - this.centre * 0.5) / (MAX_TILT - this.centre * 0.5), 0, 1);
     this.quality += q * dt;
-    if (ab < CENTRE) this.centred += dt;
+    if (ab < this.centre) this.centred += dt;
     if (ab >= MAX_TILT * 0.98) this.maxedFor += dt; else this.maxedFor = Math.max(0, this.maxedFor - dt * 2);
     if (this.maxedFor > SPILL_AFTER) {
       this.maxedFor = 0;
@@ -146,11 +147,11 @@ export class CoolGame extends Minigame {
     rr(g, lx - lw / 2, ly - lh / 2, lw, lh, lh / 2);
     g.fillStyle = '#c9dfa0'; g.fill();
     g.fillStyle = rgba(T.good, 0.55);
-    g.fillRect(lx - lw * CENTRE * 0.5, ly - lh / 2, lw * CENTRE, lh);
+    g.fillRect(lx - lw * this.centre * 0.5, ly - lh / 2, lw * this.centre, lh);
     g.strokeStyle = T.charcoal; g.lineWidth = Math.max(2, U * 0.005);
     g.beginPath();
-    g.moveTo(lx - lw * CENTRE * 0.5, ly - lh / 2); g.lineTo(lx - lw * CENTRE * 0.5, ly + lh / 2);
-    g.moveTo(lx + lw * CENTRE * 0.5, ly - lh / 2); g.lineTo(lx + lw * CENTRE * 0.5, ly + lh / 2);
+    g.moveTo(lx - lw * this.centre * 0.5, ly - lh / 2); g.lineTo(lx - lw * this.centre * 0.5, ly + lh / 2);
+    g.moveTo(lx + lw * this.centre * 0.5, ly - lh / 2); g.lineTo(lx + lw * this.centre * 0.5, ly + lh / 2);
     g.stroke();
     // bubble goes to the high side: right side down (tilt > 0) → bubble left
     const bxp = lx - this.tilt * (lw / 2 - lh * 0.55);
@@ -164,7 +165,7 @@ export class CoolGame extends Minigame {
       void f;
     }
     // arrows hinting the move direction
-    if (!this.done && Math.abs(this.tilt) > CENTRE) {
+    if (!this.done && Math.abs(this.tilt) > this.centre) {
       const dir = -Math.sign(this.tilt); // move toward the bubble
       const ax = lx + dir * (lw / 2 + 0.07 * U);
       poly(g, [[ax + dir * 0.03 * U, ly], [ax - dir * 0.01 * U, ly - 0.03 * U], [ax - dir * 0.01 * U, ly + 0.03 * U]], T.mustard);

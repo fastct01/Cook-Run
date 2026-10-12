@@ -2,6 +2,8 @@
 // Headless tests for sim/garage.js (GarageTutorial):   node public/js/onfoot/test/garage-headless.js
 //   a) two players, scripted inputs through the real input paths (DriverInput for Rook, CMD for Doc)
 //      → every step completes, in order (load/door may swap), door animates, engine cranking → on
+//   s) R3-GARAGE Suit up: hold E 1.5 s at the rack (Rook interactHeld · Doc avatarMove.hold), release decays,
+//      taps count, single-press fallback, colliders of the new lab props keep every walk path open
 //   b) solo: only Rook is scripted; AI Doc does the notebook, the crate and boards by himself
 //   c) hold-E: releasing early stalls the crank; edge-only input (no interactHeld) auto-cranks
 //   d) skip(): done, final items, EV.TUTORIAL 'skipped'
@@ -24,6 +26,7 @@ function check(name, ok, detail = '') {
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ' — ' + detail : ''}`);
 }
 const hr = (t) => console.log(`\n── ${t} ${'─'.repeat(Math.max(0, 66 - t.length))}`);
+const near = (a, b, e = 1e-6) => Math.abs(a.x - b.x) < e && Math.abs(a.z - b.z) < e;
 
 const data = await loadDataNode();
 const track = new Track(data.route, data.route.defaultSeed ?? 1);
@@ -33,7 +36,8 @@ function mockSim(solo) {
   return { track, route: data.route, rules: data.rules, data, solo, emit: (e) => events.push(e), events };
 }
 
-/** A scripted player: walks to state.target[who] along planned waypoints and presses E when `near`. */
+/** A scripted player: walks to state.target[who] along planned waypoints and presses E when `near`
+ *  (holds E on the crank and at the suit rack). */
 class Bot {
   constructor(g, who) { this.g = g; this.who = who; this.path = null; this.goal = null; this.cd = 0; this.holdMode = 'held'; }
   // world move vector + act edge + held
@@ -43,6 +47,7 @@ class Bot {
     const me = st[this.who];
     const out = { mx: 0, mz: 0, run: true, act: false, held: false };
     this.cd = Math.max(0, this.cd - DT);
+    if (st.task[this.who] !== this.lastTask) { this.lastTask = st.task[this.who]; this.cd = 0; }   // a new task: E is free again
     if (st.task[this.who] === 'crank' && this.who === 'rook') {
       out.held = true;
       if (this.cd === 0) { out.act = true; this.cd = 10; }
@@ -52,6 +57,7 @@ class Bot {
     const L = F.toLocal(me.x, me.z), T = F.toLocal(tgt.x, tgt.z);
     if (!this.goal || Math.hypot(this.goal.x - T.x, this.goal.z - T.z) > 0.2) { this.goal = T; this.path = planPath(L.x, L.z, T.x, T.z); }
     if (st.near[this.who]) {
+      if (st.task[this.who] === 'suit') { out.held = true; if (this.cd === 0) { out.act = true; this.cd = 10; } return out; }
       if (this.cd === 0) { out.act = true; this.cd = 0.3; }
       return out;
     }
@@ -74,7 +80,7 @@ function runTwoPlayer({ maxT = 120, holdMode = 'held', record = null } = {}) {
   while (!g.done && t < maxT) {
     const st = g.state();
     const r = rook.tick(st), d = doc.tick(st);
-    if (n % 4 === 0) { docMove = { type: CMD.AVATAR_MOVE, mx: d.mx, mz: d.mz, run: d.run }; g.command(docMove); }
+    if (n % 4 === 0) { docMove = { type: CMD.AVATAR_MOVE, mx: d.mx, mz: d.mz, run: d.run }; if (holdMode === 'held') docMove.hold = d.held ? 1 : 0; g.command(docMove); }
     if (d.act) g.command({ type: CMD.AVATAR_ACT });
     const input = { throttle: 0, steer: 0, moveX: r.mx, moveZ: r.mz, run: r.run, interact: r.act };
     if (holdMode === 'held') input.interactHeld = r.held;
@@ -96,17 +102,18 @@ hr('a) two players, scripted inputs (Rook: DriverInput · Doc: CMD.avatarMove/av
   const order = evs.map((e) => e.done);
   check('EV.TUTORIAL emitted for every step', evs.length === STEPS.length, order.join(' → '));
   const ix = (id) => order.indexOf(id);
-  check('order: markers < grab < {load, door} < board < crank',
-    ix('markers') === 0 && ix('grab') === 1 && Math.min(ix('load'), ix('door')) === 2 && Math.max(ix('load'), ix('door')) === 3 && ix('board') === 4 && ix('crank') === 5);
+  check('order: markers < suit < grab < {load, door} < board < crank',
+    ix('markers') === 0 && ix('suit') === 1 && ix('grab') === 2 && Math.min(ix('load'), ix('door')) === 3 && Math.max(ix('load'), ix('door')) === 4 && ix('board') === 5 && ix('crank') === 6);
   check('every EV carries step/stepId', evs.every((e) => Number.isInteger(e.step) && typeof e.stepId === 'string'));
   const s = g.state();
   check('final items', s.items.keys === 'rook' && s.items.notebook === 'doc' && s.items.crate === 'rv' && s.items.plug === 'out' && s.items.door === 1 && s.items.engine === 'on', JSON.stringify(s.items));
   check('both in the RV', s.rook.inRv && s.doc.inRv);
+  check('both suited, both suits off the rack', s.rook.suited && s.doc.suited && s.items.suits[0] === false && s.items.suits[1] === false, JSON.stringify(s.items.suits));
   check('engine went off → cranking → on', engineSeen.has('off') && engineSeen.has('cranking') && engineSeen.has('on'));
   const mid = doorSeq.filter((v) => v > 0.05 && v < 0.95);
   check('door animated 0 → 1 over ~3 s', mid.length >= 3 && mid.length <= 7, `${mid.length} half-second samples in between`);
-  check("finishes in a sensible time (8–60 s)", t > 8 && t < 60, `${t.toFixed(1)} s`);
-  check('snapshot shape', ['step', 'stepId', 'steps', 'rook', 'doc', 'items', 'prompt'].every((k) => k in s) && ['x', 'z', 'yaw', 'speed', 'carry', 'inRv'].every((k) => k in s.rook));
+  check("finishes in a sensible time (8–70 s)", t > 8 && t < 70, `${t.toFixed(1)} s`);
+  check('snapshot shape', ['step', 'stepId', 'steps', 'rook', 'doc', 'items', 'prompt', 'suitHold'].every((k) => k in s) && ['x', 'z', 'yaw', 'speed', 'carry', 'inRv', 'suited'].every((k) => k in s.rook) && s.steps.length === 7);
   check('state is JSON-safe', JSON.stringify(JSON.parse(JSON.stringify(s))) === JSON.stringify(s));
 }
 
@@ -123,11 +130,22 @@ hr('a2) prompts and gating');
   check('E before both reach markers does nothing', g.items.keys === 'hook' && /Wait for Doc/.test(g.state().prompt.rook), g.state().prompt.rook);
   Object.assign(g.D, LAYOUT.markers.doc);
   g.update(DT, {});
-  check('both at markers → step 1 grab', g.step === 1 && g.state().prompt.rook === 'Grab the keys from the hook [E]', g.state().prompt.rook);
+  check('both at markers → step 1 suit up', g.step === 1 && g.stepId === 'suit' && /Suit up at the rack/.test(g.state().prompt.rook) && /Suit up/.test(g.state().prompt.doc), g.state().prompt.rook);
+  check('suit targets = the two rack spots', near(g.frame.toLocal(g.state().target.rook.x, g.state().target.rook.z), LAYOUT.use.suit.rook) && near(g.frame.toLocal(g.state().target.doc.x, g.state().target.doc.z), LAYOUT.use.suit.doc));
+  g.update(DT, { interact: true, interactHeld: true });
+  check('keys stay on the hook until both are suited', g.items.keys === 'hook');
+  Object.assign(g.R, LAYOUT.use.suit.rook); Object.assign(g.D, LAYOUT.use.suit.doc);
+  for (let i = 0; i < 60 * 1.6; i++) g.update(DT, { interactHeld: true });
+  check('Rook suited after holding E 1.5 s; Doc still not', g.R.suited && !g.D.suited && /Wait for Doc/.test(g.state().prompt.rook) && g.step === 1, g.state().prompt.rook);
+  for (let i = 0; i < 60 * 1.6; i++) { if (i % 4 === 0) g.command({ type: CMD.AVATAR_MOVE, mx: 0, mz: 0, run: false, hold: 1 }); g.update(DT, { interactHeld: false }); }
+  const s2 = g.state();
+  check('Doc suited via avatarMove.hold → step 2 grab', g.D.suited && g.step === 2 && s2.rook.suited && s2.doc.suited && s2.items.suits.join() === 'false,false', `step ${g.step}`);
+  Object.assign(g.R, LAYOUT.markers.rook); Object.assign(g.D, LAYOUT.markers.doc); g.update(DT, {});
+  check('grab prompt', g.state().prompt.rook === 'Grab the keys from the hook [E]', g.state().prompt.rook);
   g.update(DT, { interact: true });
   check('keys taken', g.items.keys === 'rook');
   g.command({ type: CMD.AVATAR_ACT }); g.update(DT, {});
-  check('notebook taken → step 2', g.items.notebook === 'doc' && g.step === 2);
+  check('notebook taken → step 3', g.items.notebook === 'doc' && g.step === 3);
   // Rook tries the door button without unplugging
   Object.assign(g.R, LAYOUT.use.button); g.update(DT, { interact: true });
   check('door button needs the plug out first', !g.doorOpening && /Unplug/.test(g.state().prompt.rook), g.state().prompt.rook);
@@ -141,7 +159,7 @@ hr('a2) prompts and gating');
   check("carry speed ≤ 1.95 m/s even with run", vmax <= 1.95 && vmax > 1.2, vmax.toFixed(2));
   g.command({ type: CMD.AVATAR_ACT }); g.update(DT, {});
   check('E away from the RV puts the crate down', g.items.crate === 'floor' && !g.D.carry);
-  check('no step advanced by the drop', g.step === 2 && !g.complete.load);
+  check('no step advanced by the drop', g.step === 3 && !g.complete.load);
 }
 
 // ── b) solo ────────────────────────────────────────────────────────────────
@@ -164,7 +182,7 @@ hr('b) solo: AI Doc');
   }
   const s = g.state();
   check('solo tutorial done', g.done, `${t.toFixed(1)} s`);
-  check('AI Doc took the notebook, loaded the crate, boarded', s.items.notebook === 'doc' && s.items.crate === 'rv' && s.doc.inRv);
+  check('AI Doc suited up, took the notebook, loaded the crate, boarded', s.doc.suited && s.items.notebook === 'doc' && s.items.crate === 'rv' && s.doc.inRv);
   check('AI Doc walked (believable speed ≤ walk)', docMoved > 12 && maxDocSpeed <= 2.65, `${docMoved.toFixed(1)} m, max ${maxDocSpeed.toFixed(2)} m/s`);
   check('AI Doc reached his marker early', docAtMarkerT != null && docAtMarkerT < 8, `${docAtMarkerT?.toFixed(1)} s`);
   check('AI Doc boarded', docBoardT != null, `${docBoardT?.toFixed(1)} s`);
@@ -172,6 +190,11 @@ hr('b) solo: AI Doc');
   const g2 = new GarageTutorial(mockSim(true));
   Object.assign(g2.R, LAYOUT.markers.rook);
   for (let i = 0; i < 60 * 40; i++) g2.update(DT, i === 600 ? { interact: true } : {});
+  check('idle Rook (not suited): AI Doc suits up and waits for him', g2.D.suited && !g2.R.suited && g2.step === 1 && /Wait for Rook/.test(g2.state().prompt.doc), `prompt doc: ${g2.state().prompt.doc}`);
+  Object.assign(g2.R, LAYOUT.use.suit.rook);
+  for (let i = 0; i < 60 * 2; i++) g2.update(DT, { interactHeld: true });
+  Object.assign(g2.R, LAYOUT.markers.rook);
+  for (let i = 0; i < 60 * 40; i++) g2.update(DT, i === 30 ? { interact: true } : {});
   check('idle Rook: AI Doc finishes his part and waits in the RV', g2.items.crate === 'rv' && g2.D.inRv && !g2.done, `prompt doc: ${g2.state().prompt.doc}`);
 }
 
@@ -180,7 +203,8 @@ hr('c) crank: hold E');
 {
   const g = new GarageTutorial(mockSim(false));
   // fast-forward to the crank step
-  for (const k of ['markers', 'grab', 'load', 'door']) g.complete[k] = true;
+  for (const k of ['markers', 'suit', 'grab', 'load', 'door']) g.complete[k] = true;
+  g.R.suited = g.D.suited = true;
   Object.assign(g.items, { keys: 'rook', notebook: 'doc', crate: 'rv', plug: 'out' }); g.doorOpening = true;
   g.R.inRv = true; g.D.inRv = true; g.complete.board = true;
   g.update(DT, { interact: true, interactHeld: true });
@@ -194,7 +218,7 @@ hr('c) crank: hold E');
   check('done shortly after the engine is on', g.done);
   // edge-only (main.js without interactHeld): one press cranks by itself
   const h = new GarageTutorial(mockSim(false));
-  for (const k of ['markers', 'grab', 'load', 'door', 'board']) h.complete[k] = true;
+  for (const k of ['markers', 'suit', 'grab', 'load', 'door', 'board']) h.complete[k] = true;
   h.R.inRv = h.D.inRv = true;
   h.update(DT, { interact: true });
   for (let i = 0; i < 60 * 3; i++) h.update(DT, {});
@@ -211,9 +235,59 @@ hr('d) skip');
   const s = g.state();
   check('skip → done', g.done && s.done && s.skipped);
   check('skip → final items + both in RV', s.items.engine === 'on' && s.items.door === 1 && s.items.crate === 'rv' && s.rook.inRv && s.doc.inRv);
+  check('skip → both suited (suits off the rack)', s.rook.suited && s.doc.suited && s.items.suits.join() === 'false,false' && s.complete.suit);
   check('skip emits EV.TUTORIAL skipped', sim.events.some((e) => e.type === EV.TUTORIAL && e.stepId === 'skipped'));
   g.update(DT, { moveX: 1 }); g.skip();
   check('update/skip after done are no-ops', g.done && sim.events.filter((e) => e.stepId === 'skipped').length === 1);
+}
+
+// ── s) suit up ─────────────────────────────────────────────────────────────
+hr('s) Suit up (R3-GARAGE): hold, release, taps, fallback, colliders');
+{
+  const atSuit = (g) => { Object.assign(g.R, LAYOUT.markers.rook); Object.assign(g.D, LAYOUT.markers.doc); g.update(DT, {}); Object.assign(g.R, LAYOUT.use.suit.rook); Object.assign(g.D, LAYOUT.use.suit.doc); };
+  // release early → progress decays, nothing suited
+  const g = new GarageTutorial(mockSim(false)); atSuit(g);
+  for (let i = 0; i < 60; i++) g.update(DT, { interactHeld: true });
+  const mid = g.state().suitHold.rook;
+  check('holding E fills suitHold (≈ 0.67 after 1 s) + "Keep holding" prompt', mid > 0.6 && mid < 0.72 && /Keep holding/.test(g.state().prompt.rook), `${mid}`);
+  for (let i = 0; i < 60; i++) g.update(DT, { interactHeld: false });
+  check('releasing early decays it (2× speed) — not suited', g.state().suitHold.rook === 0 && !g.R.suited);
+  // away from the rack: holding does nothing
+  Object.assign(g.R, LAYOUT.markers.rook);
+  for (let i = 0; i < 120; i++) g.update(DT, { interactHeld: true });
+  check('holding E away from the rack does nothing', g.state().suitHold.rook === 0 && !g.R.suited);
+  // taps count as 0.7 s of holding each: tapping every 0.5 s suits up
+  const t = new GarageTutorial(mockSim(false)); atSuit(t);
+  let tSuit = null;
+  for (let i = 0; i < 60 * 3; i++) { t.update(DT, { interactHeld: false, interact: i % 30 === 0 }); if (tSuit == null && t.R.suited) tSuit = i * DT; }
+  check('tapping E (every 0.5 s) also suits up in ~1.5 s', tSuit != null && tSuit > 1.4 && tSuit < 1.7, `${tSuit?.toFixed(2)} s`);
+  // edge-only main.js (no interactHeld ever): one press suits by itself; Doc without a hold field: one avatarAct
+  const f = new GarageTutorial(mockSim(false)); atSuit(f);
+  f.update(DT, { interact: true }); f.command({ type: CMD.AVATAR_ACT });
+  for (let i = 0; i < 60 * 1.6; i++) f.update(DT, {});
+  check('edge-only fallback: one press each suits both up', f.R.suited && f.D.suited && f.complete.suit);
+  // Doc's hold times out with the move command (cmdTimeout 0.5 s)
+  const d = new GarageTutorial(mockSim(false)); atSuit(d);
+  d.command({ type: CMD.AVATAR_MOVE, mx: 0, mz: 0, run: false, hold: 1 });
+  for (let i = 0; i < 60 * 2; i++) d.update(DT, {});
+  check('Doc hold without refresh times out (no stuck key)', !d.D.suited && d.suitHold.doc < 0.6, `${d.suitHold.doc.toFixed(2)} s`);
+  // feedback event for the view
+  const fbg = new GarageTutorial(mockSim(false)); atSuit(fbg);
+  let sawFb = false;
+  for (let i = 0; i < 60 * 1.7; i++) { fbg.update(DT, { interactHeld: true }); if (fbg.state().fb.some((x) => x.who === 'rook' && x.what === 'suit')) sawFb = true; }
+  check("fb { who:'rook', what:'suit' } for the view's swap", sawFb);
+  // colliders: the new lab props are in LAYOUT.boxes, avatars can't walk into the rack, every spot is reachable
+  check('LAYOUT has the 9 lab-prop colliders (20 boxes)', LAYOUT.boxes.length === 20, `${LAYOUT.boxes.length}`);
+  const inBox = (p) => LAYOUT.boxes.some((b) => p.x > b[0] - 0.29 && p.x < b[1] + 0.29 && p.z > b[2] - 0.29 && p.z < b[3] + 0.29);
+  const spots = { ...LAYOUT.use, suitRook: LAYOUT.use.suit.rook, suitDoc: LAYOUT.use.suit.doc };
+  delete spots.suit;
+  const bad = Object.entries(spots).filter(([, p]) => inBox(p)).map(([k]) => k);
+  check('no use spot inside a collider', bad.length === 0, bad.join(','));
+  const plen = (a, b) => { const w = planPath(a.x, a.z, b.x, b.z); let L = 0, p = a; for (const q of w) { L += Math.hypot(q.x - p.x, q.z - p.z); p = q; } return L; };
+  const legs = [['rook marker → suit', LAYOUT.markers.rook, LAYOUT.use.suit.rook], ['doc marker → suit', LAYOUT.markers.doc, LAYOUT.use.suit.doc],
+    ['suit → keys', LAYOUT.use.suit.rook, LAYOUT.use.keys], ['suit → notebook', LAYOUT.use.suit.doc, LAYOUT.use.notebook], ['keys → plug', LAYOUT.use.keys, LAYOUT.use.plug]];
+  const lens = legs.map(([n, a, b]) => `${n} ${plen(a, b).toFixed(1)} m`);
+  check('planned paths reach the rack and back (< 20 m each)', legs.every(([, a, b]) => plen(a, b) < 20), lens.join(' · '));
 }
 
 // ── e) determinism ─────────────────────────────────────────────────────────
@@ -238,6 +312,11 @@ hr('f) fallback input (no moveX/moveZ: steer/throttle, E = oil)');
   for (let i = 0; i < 60; i++) g.update(DT, { throttle: 1, steer: 0 });
   check('W moves Rook toward the back wall (local −Z)', g.R.z < z0 - 1.5, `${z0.toFixed(2)} → ${g.R.z.toFixed(2)}`);
   Object.assign(g.R, LAYOUT.markers.rook); Object.assign(g.D, LAYOUT.markers.doc); g.update(DT, {});
+  Object.assign(g.R, LAYOUT.use.suit.rook); Object.assign(g.D, LAYOUT.use.suit.doc);
+  g.update(DT, { oil: true }); g.command({ type: CMD.AVATAR_ACT });
+  for (let i = 0; i < 60 * 1.6; i++) g.update(DT, {});
+  check('oil edge works as E (suit up: one press)', g.R.suited && g.D.suited);
+  Object.assign(g.R, LAYOUT.markers.rook); g.update(DT, {});
   g.update(DT, { oil: true });
   check('oil edge works as E', g.items.keys === 'rook');
 }
@@ -278,7 +357,7 @@ hr('h) real GameSim: garage → countdown → drive (two players · solo · skip
         input = { ...input, moveX: r.mx, moveZ: r.mz, run: r.run, interact: r.act, interactHeld: r.held };
         if (doc) {
           const d = doc.tick(G);
-          if (n % 4 === 0) sim.applyCookCommand({ type: CMD.AVATAR_MOVE, mx: d.mx, mz: d.mz, run: d.run });   // ~15 Hz
+          if (n % 4 === 0) sim.applyCookCommand({ type: CMD.AVATAR_MOVE, mx: d.mx, mz: d.mz, run: d.run, hold: d.held ? 1 : 0 });   // ~15 Hz
           if (d.act) sim.applyCookCommand({ type: CMD.AVATAR_ACT });
         }
       }
@@ -296,7 +375,7 @@ hr('h) real GameSim: garage → countdown → drive (two players · solo · skip
     check(`${tag}: GameSim starts in 'garage' with GarageTutorial`, r.ok0);
     check(`${tag}: snapshot.garage present all through the garage phase`, r.snapsOk);
     check(`${tag}: tutorial → countdown → drive`, r.tCount != null && r.tDrive != null && r.tDrive - r.tCount > 1.2 && r.tDrive - r.tCount < 1.8, `countdown at ${r.tCount?.toFixed(1)} s, drive at ${r.tDrive?.toFixed(1)} s`);
-    check(`${tag}: all 6 steps reported by EV.TUTORIAL in order`, r.tutEvents.join(',').replace('door,load', 'load,door') === 'markers,grab,load,door,board,crank', r.tutEvents.join(' → '));
+    check(`${tag}: all 7 steps reported by EV.TUTORIAL in order`, r.tutEvents.join(',').replace('door,load', 'load,door') === 'markers,suit,grab,load,door,board,crank', r.tutEvents.join(' → '));
     check(`${tag}: RV static at rvPark during the tutorial`, r.rvMoved < 0.01 && Math.hypot(r.rv0.x - r.sim.garage.rvPark.x, r.rv0.z - r.sim.garage.rvPark.z) < 0.05, `moved ${r.rvMoved.toFixed(3)} m`);
   }
   // cook commands for the wrong avatar in solo are ignored (the AI owns Doc)

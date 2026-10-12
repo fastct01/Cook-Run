@@ -384,6 +384,7 @@ export class WorldView {
     }
     // expansion events (canister, roofHit, setpiece, …) also go to the effects layer
     try { this.fx?.event?.(ev, snap); } catch (e) { /* fx is best-effort */ }
+    try { this.entities?.event?.(ev, snap); this.rv?.event?.(ev, snap); } catch (e) { /* R3-DEFEND: gun FX are best-effort */ }   // R3-DEFEND
   }
 
   // [wreck] the RV blew up (event, or the snapshot flag when the event was missed — then `late`

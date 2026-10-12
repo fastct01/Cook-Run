@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Cook &amp; Run — 3D van lab test</title>
 <link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/fonts.css">
+<link rel="stylesheet" href="css/tokens.css">
 <link rel="stylesheet" href="css/hud.css">
 <link rel="stylesheet" href="css/van.css">
 <style>
@@ -19,6 +21,11 @@
   #dbg span { padding: 3px 4px; opacity: .8; font-variant-numeric: tabular-nums; }
   body.shot #dbg { display: none; }
   #dbg { top: auto; bottom: 0; border-radius: 6px 6px 0 0; }
+  /* fake shop run (the real one is SHOPS' ShopChallenge through view.setSceneOverride) */
+  #fakeShop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: #1b2128; color: #F1ECE4;
+              font: 600 15px/1.4 'Archivo', system-ui, sans-serif; text-align: center; }
+  #fakeShop b { display: block; font-size: 22px; color: #F2B90F; margin-bottom: 6px; }
+  body.nohud #hudroot > :not(.vh) { display: none; }
 </style>
 <script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
 </head>
@@ -29,13 +36,20 @@
 </div>
 <div id="dbg"></div>
 <script type="module">
-// Harness for the 3D van lab (Agent VANWORLD).
+// Harness for the 3D van lab (Agent VANWORLD; Round 3 first person: Agent DOCFP).
 //   van-test.html?z=300|2000|5000|6150|...  FakeSnapshots preset (moving van, cops chasing) — default 300
 //   van-test.html?sim=1[&skip=40]           real GameSim + Autopilot (real feel/latAcc/bumps/inventory)
-// Tab toggles van.setActive (with ?role=driver the inactive view is the driver's chase cam, like solo mode).
+// First person by default: click the canvas for pointer lock (mouse-look), WASD, E use, Q/Esc step away,
+// O toggles the overview, V vent fan, Tab recipe board, B bump, P pause. With ?role=driver Tab toggles
+// van.setActive instead (solo style: the inactive view is the driver's chase cam).
 // Script flags: ?fire=1 ?fumes=1 ?cop=1 ?down=1 ?hp=40 ?at=stove[&work=1] ?run=street ?board=1 ?carry=1
 //               ?curtains=1 ?vent=1 ?zoom=0|1|2 ?sway=1 ?freeze=1 ?shot=1 ?dt=0.033 (fixed step)
-// Exposes window.__van, __lab, __view, __host, __gen, __sim, __advance(sec), __pause(bool), __stats(), __settled()
+//               ?view=fp|overview ?yaw=rad&pitch=rad (first-person look) ?hour=15 (time of day) ?comfort=0|1
+//               ?stop=market (fake supply stop: stop.state 'shopping', doc 'in' → "SHOP RUN — side door [E]";
+//               E at the side door → 0.8 s jump-out → a fake shop screen → back in after ?shopSecs=2.5 or Enter)
+//               ?nohud=1 (hide the driver HUD, keep the van HUD)
+// Exposes window.__van, __lab, __view, __host, __gen, __sim, __advance(sec), __pause(bool), __stats(), __settled(),
+//   __look(yaw, pitch), __viewMode(mode), __shopStop(id|null), __key(code, down)
 import { loadData } from './js/data/loadData.js';
 import { WorldView } from './js/render/WorldView.js';
 import { Hud } from './js/ui/hud.js';
@@ -48,6 +62,7 @@ const q = new URLSearchParams(location.search);
 const useSim = q.get('sim') === '1';
 const preset = q.get('z') || '300';
 if (q.has('shot')) document.body.classList.add('shot');
+if (q.has('nohud')) document.body.classList.add('nohud');
 const data = await loadData();
 const seed = q.has('seed') ? +q.get('seed') : data.route.defaultSeed;
 
@@ -62,6 +77,7 @@ const host = {
   inv: { mat: {}, units: q.has('units') ? +q.get('units') : 3, quality: 0.72, gadgets: { smoke: 1, oil: 1, nitro: 0 } },
   crew: { driver: 100, cook: 100 }, events: [], pending: new Map(), copForce: q.get('cop') === '1' ? true : null,
   cookDownFor: 0, bumpUntil: -1, bumpPow: 0, hp: q.has('hp') ? +q.get('hp') : null, commands: [],
+  shopStop: q.get('stop') || null, docOut: 'in',   // fake supply stop: Doc 'in' | 'out' | 'back'
 };
 for (const id of Object.keys(data.lab.ingredients)) host.inv.mat[id] = (data.lab.startInventory[id] || 0) + 2;
 let sim = null, ap = null, gen = null;
@@ -72,7 +88,7 @@ if (useSim) {
   ap = new Autopilot(data, { seed });
 } else {
   gen = new FakeSnapshots(data, { seed, preset, role: 'cook', start: q.has('start') ? +q.get('start') : null, speed: q.has('speed') ? +q.get('speed') : null });
-  gen.free = !q.has('freeze');
+  gen.free = !q.has('freeze') && !q.has('stop');   // a fake supply stop parks the van
 }
 
 function sendCommand(cmd) {
@@ -102,8 +118,30 @@ function sendCommand(cmd) {
   }
 }
 const lab = new CookLab(data, { sendCommand, seed });
-const van = new VanLab3D(view, lab, data, { canvas, hudRoot, role: 'cook' });
+const van = new VanLab3D(view, lab, data, { canvas, hudRoot, role: 'cook', lockHint: !q.has('shot'), viewMode: q.get('view') || null, comfort: q.has('comfort') ? q.get('comfort') !== '0' : null });
 van.setActive(true);
+if (q.has('hour')) view.setHourOverride(+q.get('hour'));
+// the side-door shop run: main.js sends CMD.shopEnter and runs SHOPS' ShopChallenge through view.setSceneOverride;
+// here a stand-in screen, then van.returnFromShop()
+let shopEl = null;
+function endFakeShop() {
+  if (!shopEl) return;
+  shopEl.remove(); shopEl = null;
+  view.setSceneOverride(null);
+  host.docOut = 'back';
+  van.returnFromShop();
+}
+van.onShopRun = (stopDef) => {
+  host.commands.push({ type: 'shopEnter', stopId: stopDef.id });
+  host.docOut = 'out';
+  view.setSceneOverride((r) => { r.setClearColor('#1b2128', 1); r.clear(); });
+  shopEl = document.createElement('div');
+  shopEl.id = 'fakeShop';
+  shopEl.innerHTML = `<div><b>${stopDef.name}</b>${stopDef.shop?.title || stopDef.shop?.type || 'shop'} run (stand-in for SHOPS' first-person shop)<br>back in the van in a moment — Enter to return now</div>`;
+  document.body.appendChild(shopEl);
+  setTimeout(endFakeShop, (q.has('shopSecs') ? +q.get('shopSecs') : 2.5) * 1000);
+};
+window.__endShop = endFakeShop;
 
 // ── loop ──────────────────────────────────────────────────────────────────
 let T = 0, lastSend = -1, simAcc = 0, labAcc = 0, lastSnap = null, paused = false;
@@ -125,6 +163,11 @@ function fakeSnap() {
   });
   if (host.copForce !== null) s.alert = { copClose: host.copForce, copDist: host.copForce ? 6 : 140 };
   if (q.has('sway')) s.feel.latAcc = Math.sin(T * 0.45) * 6.5;
+  if (host.shopStop) {
+    const st = data.route.stops.find((x) => x.id === host.shopStop) || data.route.stops[0];
+    s.stop = { id: st.id, name: st.name, state: host.docOut === 'back' ? 'returning' : 'shopping', shopType: st.shop?.type, shopT: 0, loadT: 0, progress: 0, blocked: false, doc: host.docOut, docShop: null };
+    s.rv.speed = 0; s.feel.latAcc = 0;
+  }
   if (T < host.bumpUntil) s.feel.bump = Math.max(s.feel.bump, host.bumpPow);
   s.events = [...(s.events || []), ...host.events.splice(0)];
   return s;
@@ -162,9 +205,13 @@ window.__advance = (sec, dt = 1 / 30) => { const n = Math.max(1, Math.round(sec 
 window.__pause = (p = true) => { paused = p; };
 window.__van = van; window.__lab = lab; window.__view = view; window.__host = host; window.__gen = gen; window.__sim = sim; window.__hud = hud;
 window.__settled = () => view.isSettled() && van.built;
-window.__stats = () => ({ calls: view.stats.calls, tris: view.stats.triangles, T: +T.toFixed(2), z: +(view.cur?.rv?.z ?? 0).toFixed(1), doc: van.doc ? van.doc.toJSON() : null, lab: lab.state, step: lab.getCurrentStep && lab.getCurrentStep(), fire: lab.fire, fumes: lab.fumes, units: lastSnap?.inv?.units });
+window.__stats = () => ({ calls: view.stats.calls, tris: view.stats.triangles, T: +T.toFixed(2), z: +(view.cur?.rv?.z ?? 0).toFixed(1), doc: van.doc ? van.doc.toJSON() : null, lab: lab.state, step: lab.getCurrentStep && lab.getCurrentStep(), fire: lab.fire, fumes: lab.fumes, units: lastSnap?.inv?.units,
+  view: van.viewMode, look: { ...van.look }, target: van.lookTarget, shop: van.shop?.state, shopPrompt: van.shopPrompt, docState: van.docState, locked: van.pointerLocked });
 window.__bump = (pow = 0.85, sec = 0.25) => { host.bumpUntil = T + sec; host.bumpPow = pow; };
 window.__key = (code, down = true) => van.onKey({ code, repeat: false, preventDefault() {} }, down);
+window.__look = (yaw, pitch) => van.setLook(yaw, pitch);
+window.__viewMode = (m) => van.setViewMode(m);
+window.__shopStop = (id) => { host.shopStop = id || null; host.docOut = 'in'; };
 
 let last = performance.now();
 function frame(now) {
@@ -173,14 +220,15 @@ function frame(now) {
   if (!paused) step(dt);
   if (stEl && Math.floor(now / 300) !== Math.floor((now - dt * 1000) / 300)) {
     const s = view.stats;
-    stEl.textContent = `z ${(view.cur?.rv?.z ?? 0).toFixed(0)} · calls ${s.calls} · tris ${(s.triangles / 1000).toFixed(0)}k · doc ${van.docState} · lab ${lab.state}`;
+    stEl.textContent = `z ${(view.cur?.rv?.z ?? 0).toFixed(0)} · calls ${s.calls} · tris ${(s.triangles / 1000).toFixed(0)}k · ${van.viewMode} · doc ${van.docState} · lab ${lab.state}${van.comfort ? ' · comfort' : ''}`;
   }
   requestAnimationFrame(frame);
 }
 
 // keyboard → van (never let the page scroll / focus things)
 addEventListener('keydown', (e) => {
-  if (e.code === 'Tab') { e.preventDefault(); van.setActive(!van.active); return; }   // solo-style toggle: lab ⇄ driving view
+  if (shopEl) { if (e.code === 'Enter') endFakeShop(); return; }
+  if (e.code === 'Tab' && viewRole === 'driver') { e.preventDefault(); van.setActive(!van.active); return; }   // solo-style toggle: lab ⇄ driving view
   if (van.onKey(e, true)) e.preventDefault(); else if (e.code === 'KeyP') paused = !paused; else if (e.code === 'KeyB') window.__bump(0.85);
 });
 addEventListener('keyup', (e) => { if (van.onKey(e, false)) e.preventDefault(); });
@@ -191,7 +239,8 @@ const dbg = document.getElementById('dbg');
 const link = (k, v) => { const u = new URLSearchParams(q); if (v == null) u.delete(k); else u.set(k, v); return '?' + u.toString(); };
 dbg.innerHTML = Object.keys(PRESETS).filter((k) => k !== 'zoo').map((k) => `<a href="${link('z', k)}" class="${!useSim && k === preset ? 'on' : ''}">${k}</a>`).join('') +
   `<a href="${link('sim', useSim ? null : '1')}" class="${useSim ? 'on' : ''}">sim</a>` +
-  `<button data-a="fire">fire</button><button data-a="bump">bump</button><button data-a="cop">cop</button><button data-a="down">KO</button><button data-a="fumes">fumes</button><button data-a="stock">stock</button><span id="st"></span>`;
+  `<button data-a="fire">fire</button><button data-a="bump">bump</button><button data-a="cop">cop</button><button data-a="down">KO</button><button data-a="fumes">fumes</button><button data-a="stock">stock</button>` +
+  `<button data-a="view">view (O)</button><button data-a="stop">shop stop</button><button data-a="comfort">comfort</button><span id="st"></span>`;
 const stEl = document.getElementById('st');
 dbg.addEventListener('mousedown', (e) => e.preventDefault());
 dbg.addEventListener('click', (e) => {
@@ -202,6 +251,9 @@ dbg.addEventListener('click', (e) => {
   if (a === 'down') host.crew.cook = 0;
   if (a === 'fumes') lab.fumes = Math.min(1, lab.fumes + 0.4);
   if (a === 'stock') for (const id of Object.keys(data.lab.ingredients)) host.inv.mat[id] = (host.inv.mat[id] || 0) + 2;
+  if (a === 'view') van.setViewMode(van.viewMode === 'fp' ? 'overview' : 'fp');
+  if (a === 'stop') window.__shopStop(host.shopStop ? null : 'market');
+  if (a === 'comfort') van.setComfort(!van.comfort);
 });
 
 await van.ready;
@@ -209,7 +261,9 @@ window.__advance(0.1);   // one host snapshot so the lab knows the inventory
 // scripted states
 if (q.get('zoom')) van.cam.setZoomIndex(+q.get('zoom'));
 const at = q.get('at');
-if (at && van.doc.byId[at]) { const st = van.doc.byId[at]; van.doc.x = st.stand.x; van.doc.z = st.stand.z; van.doc.yaw = van.doc.facingYawFor(at); }
+if (at && van.doc.byId[at]) { const st = van.doc.byId[at]; van.doc.x = st.stand.x; van.doc.z = st.stand.z; van.doc.yaw = van.doc.facingYawFor(at); van.setLook(van.doc.yaw, -0.45); }
+if (q.has('yaw') || q.has('pitch')) van.setLook(q.has('yaw') ? +q.get('yaw') : van.look.yaw, q.has('pitch') ? +q.get('pitch') : van.look.pitch);
+if (q.has('dx')) { van.doc.x = +q.get('dx'); van.doc.z = +(q.get('dz') ?? van.doc.z); }
 if (q.get('vent') === '1') lab.toggleVent(true);
 if (q.get('curtains') === '1') lab.toggleCurtains(true);
 if (q.get('fumes')) lab.fumes = q.get('fumes') === '1' ? 0.88 : +q.get('fumes');

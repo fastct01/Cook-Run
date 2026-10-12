@@ -19,6 +19,7 @@ import { buildTiles, groundAt } from './world/terrain.js';
 import { buildStaticStructures } from './world/structures.js';
 import { hash2 } from './roadBuilder.js';
 import { LAMP_HEADS } from './world/lights.js';
+import { START_MIN_Z, START_STREAM_UNTIL, startDistrictEnabled } from './world/startDistrict.js';   // R3-GARAGE
 
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
 const _tint = new THREE.Color();
@@ -38,6 +39,7 @@ export class Chunks {
     this.protos = new WorldProtos(lib, this.atlas);
     this.layout = new Layout(info, this.protos, this.seed);
     this._tintsDone = new Set();
+    this.startMinZ = startDistrictEnabled(info) ? START_MIN_Z : null;   // R3-GARAGE: the start district reaches back to z −200
     // the garage door position along the road (from the model) for the driveway
     if (info.garage) {
       try {
@@ -48,12 +50,19 @@ export class Chunks {
     }
   }
   setRange(behind, ahead) { this.range = [-behind, ahead]; }
+  // R3-GARAGE: lowest chunk index kept around z (ci ≥ −2 as before; back to the start district's START_MIN_Z
+  // while the focus is in the first START_STREAM_UNTIL metres)
+  _lowCi(z) {
+    let a = Math.max(-2, Math.floor((z + this.range[0]) / CHUNK));
+    if (this.startMinZ != null && z < START_STREAM_UNTIL) a = Math.min(a, Math.floor(this.startMinZ / CHUNK));
+    return a;
+  }
 
   // Ensure chunks around z exist. budgetMs limits build time per call (Infinity = all, synchronous).
   // Builds are generators that yield between phases (road, tiles, structures, every ~30 scenery
   // items), so one heavy chunk is spread over several frames instead of causing a hitch.
   update(z, budgetMs = 8) {
-    const a = Math.max(-2, Math.floor((z + this.range[0]) / CHUNK));
+    const a = this._lowCi(z);   // R3-GARAGE (was max(-2, …))
     const b = Math.min(this.nChunks, Math.floor((z + this.range[1]) / CHUNK));
     for (const [ci, ch] of this.map) {
       if (ci < a - 1 || ci > b + 1) { this._dispose(ch); this.map.delete(ci); }
@@ -90,8 +99,8 @@ export class Chunks {
     return want.length - n;
   }
   pending(z) {
-    const a = Math.floor((z + this.range[0]) / CHUNK), b = Math.min(this.nChunks, Math.floor((z + this.range[1]) / CHUNK));
-    let n = 0; for (let ci = Math.max(-2, a); ci <= b; ci++) if (!this.map.has(ci)) n++; return n;
+    const a = this._lowCi(z), b = Math.min(this.nChunks, Math.floor((z + this.range[1]) / CHUNK));   // R3-GARAGE
+    let n = 0; for (let ci = a; ci <= b; ci++) if (!this.map.has(ci)) n++; return n;
   }
 
   _dispose(ch) {

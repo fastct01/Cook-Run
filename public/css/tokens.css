@@ -1,0 +1,110 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   Round 3 design tokens — "dark glass". ONE source of truth for every in-game and menu
+   surface (HUD, van HUD, shops, roof defence, lobby, overlays). Reference: docs/r3/ui/*.png
+   (rendered from the Round 3 UI canvas) and docs/r3/ui/src/*.html (their exact markup).
+   Rules: near-black translucent glass, 1 px hairlines, an 8 px grid, 16 px screen margins.
+   Panels in a row share one height. Nothing tilts, bounces or casts a hard offset shadow;
+   things fade/slide ≤ 8 px, 120–200 ms. Accents are used sparingly. Text ≥ 4.5:1 on glass.
+   ───────────────────────────────────────────────────────────────────────────── */
+:root {
+  /* surfaces */
+  --g-glass: rgba(14, 15, 17, .72);      /* panel fill, with backdrop blur 10 px */
+  --g-glass-hi: rgba(14, 15, 17, .84);   /* dense text panels / lists over bright scenes */
+  --g-glass-lo: rgba(14, 15, 17, .56);   /* pills, tracks */
+  --g-solid: #0E0F11;                    /* full-screen backgrounds */
+  --g-line: rgba(255, 255, 255, .10);    /* 1 px panel border */
+  --g-line-2: rgba(255, 255, 255, .18);  /* controls, dividers */
+  --g-well: rgba(255, 255, 255, .07);    /* insets, meter tracks */
+  --g-blur: 10px;
+  --g-radius: 10px;                      /* panels */
+  --g-radius-sm: 8px;                    /* controls, keycaps */
+  --g-shadow: 0 6px 18px rgba(0, 0, 0, .26);
+  /* text */
+  --g-text-1: #F1ECE4;                   /* primary */
+  --g-text-2: #BDB8B0;                   /* secondary */
+  --g-text-3: #8E8A84;                   /* disabled / hints (never body copy) */
+  /* accents (sparingly) */
+  --g-amber: #F2B90F;                    /* route · heat · go */
+  --g-rust: #E07A3C;                     /* Rook · seen */
+  --g-red: #E5483A;                      /* danger · bust */
+  --g-green: #5BBF6A;                    /* heal · done */
+  --g-blue: #4C8DFF;                     /* cops · cooling */
+  --g-teal: #5FB3A8;                     /* Doc · lab */
+  /* difficulty tiles */
+  --g-easy: #D9C38A;                     /* sand */
+  --g-hard: #E07A3C;                     /* rust */
+  --g-extreme: #E5483A;                  /* red */
+  /* type */
+  --g-font: 'Archivo', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --g-font-display: 'Fraunces', Georgia, 'Times New Roman', serif;   /* big moments only */
+  /* spacing */
+  --g-margin: 16px;
+  --g-gap: 8px;
+  --g-row-top: 56px;                     /* top row panel height */
+  --g-row-bottom: 64px;                  /* bottom row panel height */
+  --g-pill: 28px;
+  --g-side: 232px;                       /* side panel width */
+  --g-strip: 600px;                      /* route strip width */
+  --g-ease: cubic-bezier(.2, .7, .2, 1);
+  --g-fast: 140ms;
+  /* ── R3-HUD additions (extend only; never rename the tokens above) ── */
+  --g-slow: 200ms;                       /* fades of whole panels / titles */
+  --g-radius-lg: 12px;                   /* big cards (end screen) */
+  --g-track: rgba(255, 255, 255, .14);   /* meter / slider track */
+  --g-star-off: rgba(241, 236, 228, .38);/* empty star outline */
+  --g-key-bg: rgba(255, 255, 255, .10);  /* raised keycap (F, E) */
+  --g-key-line: rgba(255, 255, 255, .26);
+  --g-ink: #17130A;                      /* text on amber */
+  --g-hull: #D9D3C9;                     /* RV hull bar */
+  /* accent text tints: the accent colours lifted for ≥ 4.5:1 on glass */
+  --g-amber-text: #F2B90F;
+  --g-rust-text: #F4A270;
+  --g-red-text: #FF7F70;
+  --g-green-text: #8EDC9A;
+  --g-blue-text: #8DB6FF;
+  --g-teal-text: #86D0C6;
+}
+/* R3-HUD: buttons shared by the HUD end screen and the pause/notice overlay */
+.g-btn {
+  box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: 50px; padding: 0 22px; border-radius: var(--g-radius-sm); cursor: pointer; white-space: nowrap;
+  font-family: var(--g-font); font-stretch: 92%; font-weight: 700; font-size: 17px; line-height: 1; letter-spacing: .005em;
+  color: var(--g-text-1); background: var(--g-glass-hi); border: 1px solid var(--g-line-2);
+  -webkit-backdrop-filter: blur(var(--g-blur)); backdrop-filter: blur(var(--g-blur));
+  transition: background var(--g-fast) var(--g-ease), border-color var(--g-fast) var(--g-ease);
+}
+.g-btn:hover { background: rgba(40, 42, 46, .9); border-color: rgba(255, 255, 255, .28); }
+.g-btn:focus-visible { outline: 2px solid var(--g-amber); outline-offset: 2px; }
+.g-btn--primary { background: var(--g-amber); border-color: transparent; color: var(--g-ink); box-shadow: inset 0 -2px 0 rgba(0, 0, 0, .22); font-size: 18px; }
+.g-btn--primary:hover { background: #FFC62A; border-color: transparent; }
+.g-btn svg { width: 14px; height: 14px; flex: none; display: block; }
+.g-keycap {  /* raised keycap: F on DEFEND, E prompts */
+  display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; flex: none;
+  min-width: 24px; height: 24px; padding: 0 5px; border-radius: 4px;
+  background: var(--g-key-bg); border: 1px solid var(--g-key-line); border-bottom-width: 2px;
+  font: 700 12px/1 var(--g-font); font-stretch: 85%; color: var(--g-text-1);
+}
+/* Reusable building blocks (use these classes or copy the declarations). */
+.g-panel {
+  background: var(--g-glass); border: 1px solid var(--g-line); border-radius: var(--g-radius);
+  box-shadow: var(--g-shadow); -webkit-backdrop-filter: blur(var(--g-blur)); backdrop-filter: blur(var(--g-blur));
+  color: var(--g-text-1); font-family: var(--g-font);
+}
+.g-label {   /* small caps labels: "WANTED", "NEAREST COP", "BAGS" */
+  font-family: var(--g-font); font-stretch: 75%; font-weight: 700; font-size: 9.5px; line-height: 1;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--g-text-2);
+}
+.g-num {     /* numbers: tabular, slightly condensed */
+  font-family: var(--g-font); font-stretch: 88%; font-weight: 750; font-variant-numeric: tabular-nums;
+}
+.g-key {     /* keycap */
+  display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box;
+  border-radius: 5px; border: 1px solid var(--g-line-2); background: var(--g-well);
+  font: 700 10px/1 var(--g-font); font-stretch: 80%; color: var(--g-text-1);
+}
+.g-title {   /* big moments only */
+  font-family: var(--g-font-display); font-weight: 800; color: var(--g-text-1); letter-spacing: -.01em;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root { --g-fast: 0ms; }
+}

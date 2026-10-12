@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Cook &amp; Run — on-foot test (garage + shops)</title>
 <link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/fonts.css">
+<link rel="stylesheet" href="css/tokens.css">
 <link rel="stylesheet" href="css/hud.css">
 <link rel="stylesheet" href="css/onfoot.css">
 <style>
@@ -34,6 +36,10 @@
 //       GarageTutorial with a mock sim → mock snapshots → WorldView + GarageView. `bot` scripts players
 //       (partner = the other avatar; me = your avatar through the real key path). The cook role gets
 //       15 Hz snapshots with ~80 ms latency (like the network).
+//       R3-GARAGE: &drive=1 → once the tutorial is done the Autopilot drives the RV out (real GameSim) so the
+//       way-out arrows can be watched into the drive; &cam=cab → the driver's cab view after GarageView let go
+//       (CAB's FirstPersonDriver, else a bare eye camera); &skip=1 → skip the tutorial at once.
+//       window.__onfoot.arrows() → the ExitArrows debug state
 //   onfoot-test.html?mode=shop&stop=hardware|market|chandlery|gas_ice|megamart|farm|junkyard|lastgas[&bot=1]
 //       One ShopChallenge on a WorldView. bot=1 → the built-in scripted player.
 //   &shot=1 hides the debug bar · &dt=0.033 fixed frame step
@@ -71,7 +77,7 @@ function link(label, params, on) {
   a.href = '?' + p.toString(); a.textContent = label; if (on) a.className = 'on';
   dbg.appendChild(a);
 }
-for (const [l, p] of [['garage·driver', { mode: 'garage', role: 'driver', bot: 'partner' }], ['garage·cook', { mode: 'garage', role: 'cook', bot: 'partner' }], ['garage·solo', { mode: 'garage', role: 'driver', solo: 1 }]]) link(l, p, mode === 'garage' && role === p.role && !!solo === !!p.solo);
+for (const [l, p] of [['garage·driver', { mode: 'garage', role: 'driver', bot: 'partner' }], ['garage·cook', { mode: 'garage', role: 'cook', bot: 'partner' }], ['garage·solo', { mode: 'garage', role: 'driver', solo: 1 }], ['garage·drive-out', { mode: 'garage', role: 'driver', solo: 1, bot: 'me', drive: 1, cam: 'cab' }]]) link(l, p, mode === 'garage' && role === p.role && !!solo === !!p.solo && !!q.get('drive') === !!p.drive);
 for (const s of data.route.stops) link(s.id, { mode: 'shop', stop: s.id }, mode === 'shop' && q.get('stop') === s.id);
 const info = document.createElement('span'); dbg.appendChild(info);
 
@@ -118,7 +124,19 @@ if (mode === 'garage') {
   let lastCookSnap = null, stepN = 0;
   const gState = () => (real ? sim.garage.state() : g.state());
 
+  // R3-GARAGE: &drive=1 — after the tutorial the Autopilot drives out (events collected for the view)
+  const DRIVE = q.get('drive') === '1' && real;
+  let ap = null, apEvents = [];
+  if (DRIVE) { const { Autopilot } = await import('./js/sim/autopilot.js'); ap = new Autopilot(data, { seed, sim, tutorial: 'play', stops: false }); }
+  if (q.get('skip') === '1') setTimeout(() => O.skip(), 300);
   function stepOnce() {
+    if (DRIVE && sim.phase !== 'garage') {
+      const s = sim.snapshot(); apEvents.push(...(s.events || []));
+      const inp = ap.update(s);
+      sim.step(inp, STEP); simT += STEP; stepN++;
+      if (g.done && !O.done) { O.done = true; O.doneT = simT; }
+      return;
+    }
     const G = gState();
     // my bot drives the keys like a player
     if (meBot) {
@@ -135,7 +153,7 @@ if (mode === 'garage') {
     let input = { throttle: 0, steer: 0, handbrake: false, horn: false, smoke: false, oil: false, nitro: false, reset: false };
     if (role === 'driver') {
       Object.assign(input, gv.consumeInput());
-      if (pb && stepN % 4 === 0) (real ? sim.applyCookCommand.bind(sim) : g.command.bind(g))({ type: 'avatarMove', mx: pb.mx, mz: pb.mz, run: pb.run });
+      if (pb && stepN % 4 === 0) (real ? sim.applyCookCommand.bind(sim) : g.command.bind(g))({ type: 'avatarMove', mx: pb.mx, mz: pb.mz, run: pb.run, hold: pb.held ? 1 : 0 });
       if (pb && pb.act) (real ? sim.applyCookCommand.bind(sim) : g.command.bind(g))({ type: 'avatarAct' });
     } else {
       if (pb) Object.assign(input, { moveX: pb.mx, moveZ: pb.mz, run: pb.run, interact: pb.act, interactHeld: pb.held });
@@ -152,6 +170,23 @@ if (mode === 'garage') {
     return lastCookSnap;
   }
   O.fast = (sec) => { const n = Math.round(sec / STEP); for (let i = 0; i < n; i++) stepOnce(); };
+  O.arrows = () => view.structures?.exitArrows?.debug?.() ?? null;
+  // the driver's cab once GarageView has released the camera (&cam=cab): CAB's FirstPersonDriver, else a bare eye
+  async function startCab() {
+    if (q.get('cam') !== 'cab' || role !== 'driver') return;
+    try {
+      const { FirstPersonDriver } = await import('./js/render/fp/FirstPersonDriver.js');
+      const fp = new FirstPersonDriver(view, data, { pointerLock: false, mirrors: true });
+      await fp.ready; fp.setActive(true); O.fp = fp;
+    } catch (e) {
+      console.warn('[onfoot-test] FirstPersonDriver unavailable, bare cab eye', e && e.message);
+      view.setCameraController({ update(dt, cam, s) {
+        const rv = s.rv, c = Math.cos(rv.yaw), sn = Math.sin(rv.yaw), lx = 0.55, lz = 2.5;
+        cam.position.set(rv.x + lx * c + lz * sn, (rv.y || 0) + 1.98, rv.z - lx * sn + lz * c);
+        cam.rotation.set(-0.15, rv.yaw + Math.PI, 0, 'YXZ'); cam.layers.disable(1); cam.fov = 72; cam.updateProjectionMatrix();
+      } });
+    }
+  }
   O.state = () => gState();
   O.skip = () => gv.onSkip && gv.onSkip();
 
@@ -165,10 +200,12 @@ if (mode === 'garage') {
     while (acc >= STEP && n < 8) { stepOnce(); acc -= STEP; n++; }
     if (n === 8) acc = 0;
     let snap;
-    if (role === 'driver') { snap = snapNow(); view.pushSnapshot(snap, { interpolate: false }); }
+    if (role === 'driver') { snap = snapNow(); if (apEvents.length) { snap = { ...snap, events: apEvents.concat(snap.events || []) }; apEvents = []; } view.pushSnapshot(snap, { interpolate: false }); }
     else { snap = cookSnap(); if (snap) view.pushSnapshot(snap, { interpolate: true }); }
     if (O.done) tAfterDone += dt;
     gv.update(dt, snap || null);
+    if (gv.finished && !O.gvGone) { O.gvGone = true; gv.destroy(); startCab(); }
+    if (O.fp && snap) O.fp.update(dt, snap);
     view.render(dt);
     O.calls = view.renderer.info.render.calls;
     const G = gState();

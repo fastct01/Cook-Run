@@ -5,8 +5,9 @@
 //   const g = new GarageTutorial(sim);     // sim: { track, route|data, solo, emit(ev) } (GameSim helper API)
 //   g.update(dt, driverInput);             // Rook: input.moveX/moveZ (world, −1..1), input.run,
 //                                          //       input.interact (edge), input.interactHeld (level, optional), input.jump (edge)
-//   g.command(cmd);                        // Doc:  CMD.avatarMove { mx, mz, run } (world) · CMD.avatarAct {} · CMD.avatarJump {}
-//   g.skip();                              // DCMD.skipTutorial → everything done, both in the RV, engine on
+//   g.command(cmd);                        // Doc:  CMD.avatarMove { mx, mz, run, hold } (world; hold = E held, 0|1)
+//                                          //       · CMD.avatarAct {} · CMD.avatarJump {}
+//   g.skip();                              // DCMD.skipTutorial → everything done, both suited + in the RV, engine on
 //   g.state();                             // → snapshot.garage (EXPANSION_CONTRACT.md "Snapshot additions")
 //   g.done                                 // true once the engine is running (SIM-CORE → phase 'countdown')
 //   g.rook / g.doc                         // world {x, z, yaw, speed, carry, inRv}
@@ -18,16 +19,22 @@
 // z = 45, rotation.y = +π/2) at local offset EXT_OFFSET, so its rvPark lands on the exterior's `bay`
 // and the two roll-up doors line up. local (lx, lz) → world (ox + lz, oz − lx); world yaw = local + π/2.
 //
-// Steps (ids in STEPS): 0 markers · 1 grab · 2 load (Doc) · 3 door (Rook) · 4 board · 5 crank.
-// 2 and 3 run in parallel (different players); `step` is the first unfinished step.
+// Steps (ids in STEPS): 0 markers · 1 suit · 2 grab · 3 load (Doc) · 4 door (Rook) · 5 board · 6 crank.
+// 3 and 4 run in parallel (different players); `step` is the first unfinished step.
+// R3-GARAGE "Suit up": each player walks to the suit rack on the back wall and holds E for 1.5 s
+// (Rook: input.interactHeld · Doc: avatarMove.hold, re-sent at ~15 Hz while held). A tap of E counts
+// as `tapHold` (0.7 s) of holding, so tapping/mashing E works too (and bots/old clients that only
+// send edges); with no held field at all a single press suits up by itself (like the crank).
 //
 // Unity port: one MonoBehaviour (GarageTutorial) + a static GarageLayout; avatars are kinematic
 // CharacterControllers fed by the same velocity model (moveAvatar), colliders are the BOXES/CIRCLES below.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { JUMP, tryJump, stepJump, resetJump } from '../shared/jump.js';
+// R3-GARAGE: the lab dressing + suit rack placements (pure data, no three.js) — colliders and the Suit up spots
+import { R3_GARAGE_BOXES, R3_SUIT_UP } from '../assets/expansion/r3-garage-layout.js';
 
-export const STEPS = Object.freeze(['markers', 'grab', 'load', 'door', 'board', 'crank']);
+export const STEPS = Object.freeze(['markers', 'suit', 'grab', 'load', 'door', 'board', 'crank']);
 
 /** Interior-local offset of `garage_interior` inside the `rooks_garage` exterior frame. */
 export const EXT_OFFSET = Object.freeze({ x: -1.8, z: -2.0 });
@@ -57,6 +64,10 @@ export const LAYOUT = Object.freeze({
     [-2.2, -1.75, 1.95, 5.25],     // leaning tyres on the lift-bay line (one flat face: no notch to snag on)
     [8.2, 9.0, 2.1, 5.7],          // shelving rack + compressor
     [2.65, 5.35, -4.55, 4.15],     // the parked RV (8.6 × 2.6 + mirrors)
+    // R3-GARAGE lab dressing along the walls (r3-garage-layout.js; clear of every walk path):
+    // chem bench, fume hood, reagent shelf, suit rack, safety station (back wall), recipe whiteboard
+    // (left wall), drums, gas cylinders, jerrycans (right wall)
+    ...R3_GARAGE_BOXES.map((b) => b.slice()),
   ],
   circles: [
     [-7.6, -2.6, 0.32],            // desk chair
@@ -74,7 +85,10 @@ export const LAYOUT = Object.freeze({
     button: { x: 0.9, z: 6.35 },
     sideDoor: { x: 2.05, z: 0.7 },
     driverDoor: { x: 5.95, z: 2.35 },
+    // R3-GARAGE: Suit up — one spot per suit, 0.68 m in front of the rack, 1.25 m clear of the RV's tail
+    suit: { rook: { x: R3_SUIT_UP.use.rook.x, z: R3_SUIT_UP.use.rook.z }, doc: { x: R3_SUIT_UP.use.doc.x, z: R3_SUIT_UP.use.doc.z } },
   },
+  suitRack: { x: 5.31, z: -6.73, glow: { x: R3_SUIT_UP.marker.x, z: R3_SUIT_UP.marker.z } },   // R3-GARAGE
   items: {
     keys: { x: -4.25, y: 1.52, z: -6.925 },
     notebook: { x: -8.5, y: 0.76, z: -2.8 },
@@ -88,6 +102,7 @@ export const LAYOUT = Object.freeze({
 const DEF = Object.freeze({
   walk: 2.6, run: 4.2, carry: 1.9, accel: 16, radius: 0.3, interact: 1.2, markerRadius: 0.9,
   crateRadius: 0.42, doorSeconds: 3, holdSeconds: 1.5, crankSeconds: 2.0, onToDone: 0.6, cmdTimeout: 0.5,
+  suitSeconds: R3_SUIT_UP.holdSeconds ?? 1.5, tapHold: 0.7,   // R3-GARAGE: Suit up hold; one E tap = 0.7 s of holding
 });
 
 /**
@@ -255,6 +270,8 @@ export function planPath(ax, az, bx, bz) {
 const PROMPTS = {
   rook: {
     markers: 'Walk to the key rack — follow the glow',
+    suit: 'Suit up at the rack: hold [E]',
+    suiting: 'Keep holding [E]…',
     keys: 'Grab the keys from the hook [E]',
     plug: 'Unplug the shore-power cable [E]',
     button: 'Open the garage door — hit the button [E]',
@@ -265,6 +282,8 @@ const PROMPTS = {
   },
   doc: {
     markers: 'Walk to your desk — follow the glow',
+    suit: 'Suit up at the rack: hold [E]',
+    suiting: 'Keep holding [E]…',
     notebook: 'Take the notebook [E]',
     crate: 'Pick up the supply crate [E]',
     carry: 'Carry the crate to the RV side door — [E] to load it',
@@ -276,7 +295,7 @@ const PROMPTS = {
 
 function newAvatar(s) {
   return { x: s.x, z: s.z, yaw: s.yaw, vx: 0, vz: 0, speed: 0, walkPhase: 0, carry: null, inRv: false, act: 0,
-    atMarker: false, jt: -1, jumpBuf: 0, y: 0 };
+    atMarker: false, jt: -1, jumpBuf: 0, y: 0, suited: false };
 }
 
 export class GarageTutorial {
@@ -291,7 +310,7 @@ export class GarageTutorial {
     this.done = false;
     this.skipped = false;
     this.steps = STEPS;
-    this.complete = { markers: false, grab: false, load: false, door: false, board: false, crank: false };
+    this.complete = { markers: false, suit: false, grab: false, load: false, door: false, board: false, crank: false };
     this.R = newAvatar(LAYOUT.start.rook);
     this.D = newAvatar(LAYOUT.start.doc);
     this.items = { keys: 'hook', notebook: 'desk', crate: 'floor', plug: 'in', door: 0, engine: 'off' };
@@ -301,7 +320,12 @@ export class GarageTutorial {
     this.autoCrank = false;        // edge-only input: one press cranks by itself
     this.sawHeldField = false;
     this.crankT = 0; this.caught = false; this.onT = 0;
-    this.docIn = { mx: 0, mz: 0, run: false, t: -1e9 };   // last CMD.avatarMove (local dir)
+    this.docIn = { mx: 0, mz: 0, run: false, hold: false, t: -1e9 };   // last CMD.avatarMove (local dir)
+    // R3-GARAGE Suit up: hold progress (s), last E press (sim t), single-press fallback, Doc sent a `hold` field
+    this.suitHold = { rook: 0, doc: 0 };
+    this.lastPress = { rook: -1e9, doc: -1e9 };
+    this.autoSuit = { rook: false, doc: false };
+    this.sawDocHold = false;
     this.docAct = false;
     this.docJump = false;
     this.feedback = [];            // short-lived per-action markers for the view: {who, what, t}
@@ -323,7 +347,8 @@ export class GarageTutorial {
     if (cmd.type === 'avatarMove') {
       if (this.solo) return;
       const d = this.frame.dirToLocal(+cmd.mx || 0, +cmd.mz || 0);
-      this.docIn = { mx: clamp(d.x, -1, 1), mz: clamp(d.z, -1, 1), run: !!cmd.run, t: this.t };
+      if (cmd.hold != null) this.sawDocHold = true;
+      this.docIn = { mx: clamp(d.x, -1, 1), mz: clamp(d.z, -1, 1), run: !!cmd.run, hold: !!cmd.hold, t: this.t };
     } else if (cmd.type === 'avatarAct') {
       if (this.solo) return;
       this.docAct = true;
@@ -338,7 +363,7 @@ export class GarageTutorial {
     this.skipped = true;
     for (const k of STEPS) this.complete[k] = true;
     Object.assign(this.items, { keys: 'rook', notebook: 'doc', crate: 'rv', plug: 'out', door: 1, engine: 'on' });
-    for (const a of [this.R, this.D]) { a.inRv = true; a.carry = null; a.vx = a.vz = a.speed = 0; resetJump(a); }
+    for (const a of [this.R, this.D]) { a.inRv = true; a.suited = true; a.carry = null; a.vx = a.vz = a.speed = 0; resetJump(a); }
     Object.assign(this.R, LAYOUT.use.driverDoor); Object.assign(this.D, LAYOUT.use.sideDoor);
     this.done = true;
     this._emit({ type: 'tutorial', step: STEPS.length, stepId: 'skipped', done: 'skipped' });
@@ -367,10 +392,10 @@ export class GarageTutorial {
     const rHeld = !!input.interactHeld;
 
     // Doc's input
-    let dmx = 0, dmz = 0, dRun = false, dAct = false, dJump = false;
-    if (this.ai) ({ mx: dmx, mz: dmz, run: dRun, act: dAct } = this._aiStep(dt));
+    let dmx = 0, dmz = 0, dRun = false, dAct = false, dJump = false, dHeld = false;
+    if (this.ai) ({ mx: dmx, mz: dmz, run: dRun, act: dAct, hold: dHeld } = this._aiStep(dt));
     else {
-      if (this.t - this.docIn.t <= this.cfg.cmdTimeout) { dmx = this.docIn.mx; dmz = this.docIn.mz; dRun = this.docIn.run; }
+      if (this.t - this.docIn.t <= this.cfg.cmdTimeout) { dmx = this.docIn.mx; dmz = this.docIn.mz; dRun = this.docIn.run; dHeld = this.docIn.hold; }
       dAct = this.docAct;
       dJump = this.docJump;
     }
@@ -396,6 +421,10 @@ export class GarageTutorial {
 
     if (rAct) this._rookAct();
     if (dAct) this._docAct();
+
+    // step 1: suit up (R3-GARAGE) — hold E at the rack
+    this._suitStep('rook', R, dt, this.sawHeldField ? rHeld : false);
+    this._suitStep('doc', D, dt, this.ai ? !!dHeld : this.sawDocHold ? dHeld : false);
 
     // door animation
     if (this.doorOpening && this.items.door < 1) this.items.door = Math.min(1, this.items.door + dt / this.cfg.doorSeconds);
@@ -423,6 +452,8 @@ export class GarageTutorial {
     const c = this.complete;
     if (this.R.inRv) return c.board ? (c.crank ? null : 'crank') : 'waitIn';
     if (!c.markers) return this.R.atMarker ? 'wait' : 'markers';
+    if (!this.R.suited) return 'suit';
+    if (!c.suit) return 'wait';
     if (this.items.keys !== 'rook') return 'keys';
     if (!c.grab) return 'wait';
     if (this.items.plug !== 'out') return 'plug';
@@ -433,6 +464,8 @@ export class GarageTutorial {
     const c = this.complete;
     if (this.D.inRv) return c.board ? (c.crank ? null : 'crank') : 'waitIn';
     if (!c.markers) return this.D.atMarker ? 'wait' : 'markers';
+    if (!this.D.suited) return 'suit';
+    if (!c.suit) return 'wait';
     if (this.items.notebook !== 'doc') return 'notebook';
     if (!c.grab) return 'wait';
     if (this.items.crate === 'floor') return 'crate';
@@ -442,7 +475,9 @@ export class GarageTutorial {
   _rookAct() {
     const R = this.R, U = LAYOUT.use, task = this._rookTask();
     R.act = 0.4;
-    if (task === 'keys' && this.complete.markers && this._near(R, U.keys)) { this.items.keys = 'rook'; this._fb('rook', 'keys'); this._checkGrab(); }
+    this.lastPress.rook = this.t;
+    if (task === 'suit') { if (!this.sawHeldField && this._near(R, U.suit.rook)) this.autoSuit.rook = true; }
+    else if (task === 'keys' && this.complete.markers && this._near(R, U.keys)) { this.items.keys = 'rook'; this._fb('rook', 'keys'); this._checkGrab(); }
     else if (task === 'plug' && this._near(R, U.plug)) { this.items.plug = 'out'; this._fb('rook', 'plug'); }
     else if (task === 'button' && this._near(R, U.button)) { this.doorOpening = true; this._fb('rook', 'button'); this._complete('door'); }
     else if (task === 'board' && this._near(R, U.driverDoor)) { R.inRv = true; R.x = U.driverDoor.x; R.z = U.driverDoor.z; R.carry = null; this._fb('rook', 'board'); this._checkBoard(); }
@@ -451,7 +486,9 @@ export class GarageTutorial {
   _docAct() {
     const D = this.D, U = LAYOUT.use, task = this._docTask();
     D.act = 0.4;
-    if (task === 'notebook' && this.complete.markers && this._near(D, U.notebook)) { this.items.notebook = 'doc'; this._fb('doc', 'notebook'); this._checkGrab(); }
+    this.lastPress.doc = this.t;
+    if (task === 'suit') { if (!this.sawDocHold && this._near(D, U.suit.doc)) this.autoSuit.doc = true; }
+    else if (task === 'notebook' && this.complete.markers && this._near(D, U.notebook)) { this.items.notebook = 'doc'; this._fb('doc', 'notebook'); this._checkGrab(); }
     else if (task === 'crate' && Math.hypot(D.x - this.crate.x, D.z - this.crate.z) <= this.cfg.interact + 0.15) { this.items.crate = 'doc'; D.carry = 'crate'; this._fb('doc', 'pickup'); }
     else if (task === 'carry') {
       if (this._near(D, U.sideDoor)) { this.items.crate = 'rv'; D.carry = null; this._fb('doc', 'load'); this._complete('load'); }
@@ -462,6 +499,23 @@ export class GarageTutorial {
         this.items.crate = 'floor'; D.carry = null; this._fb('doc', 'drop');
       }
     } else if (task === 'board' && this._near(D, U.sideDoor)) { D.inRv = true; D.x = U.sideDoor.x; D.z = U.sideDoor.z; this._fb('doc', 'board'); this._checkBoard(); }
+  }
+  /** R3-GARAGE Suit up: hold E (or keep tapping it) within reach of your suit for cfg.suitSeconds. */
+  _suitStep(who, a, dt, held) {
+    if (a.suited || a.inRv) return;
+    const task = who === 'rook' ? this._rookTask() : this._docTask();
+    const near = task === 'suit' && this._near(a, LAYOUT.use.suit[who]);
+    if (!near) this.autoSuit[who] = false;
+    const tap = this.t - this.lastPress[who] < this.cfg.tapHold;
+    if (near && (held || tap || this.autoSuit[who])) {
+      this.suitHold[who] += dt;
+      a.act = Math.max(a.act, 0.2);
+    } else this.suitHold[who] = Math.max(0, this.suitHold[who] - dt * 2);
+    if (this.suitHold[who] >= this.cfg.suitSeconds) {
+      a.suited = true; this.suitHold[who] = this.cfg.suitSeconds; this.autoSuit[who] = false;
+      this._fb(who, 'suit');
+      if (this.R.suited && this.D.suited) this._complete('suit');
+    }
   }
   _checkGrab() { if (!this.complete.grab && this.items.keys === 'rook' && this.items.notebook === 'doc') this._complete('grab'); }
   _checkBoard() { if (!this.complete.board && this.R.inRv && this.D.inRv) this._complete('board'); }
@@ -476,6 +530,7 @@ export class GarageTutorial {
   // ── solo AI Doc ───────────────────────────────────────────────────────────
   _aiGoal(task) {
     const U = LAYOUT.use;
+    if (task === 'suit') return U.suit.doc;
     if (task === 'markers' || task === 'notebook' || task === 'wait') return this.complete.markers ? U.notebook : LAYOUT.markers.doc;
     if (task === 'crate') {
       // stand on the side of the crate that faces Doc's approach (towards the room centre)
@@ -487,7 +542,7 @@ export class GarageTutorial {
   }
   _aiStep(dt) {
     const ai = this.ai, D = this.D;
-    const out = { mx: 0, mz: 0, run: false, act: false };
+    const out = { mx: 0, mz: 0, run: false, act: false, hold: false };
     const task = this._docTask();
     if (task === 'waitIn' || task === 'crank' || task == null) return out;
     const goal = this._aiGoal(task);
@@ -495,10 +550,10 @@ export class GarageTutorial {
     if (ai.task !== task || !ai.goal || Math.hypot(ai.goal.x - goal.x, ai.goal.z - goal.z) > 0.3) {
       ai.task = task; ai.goal = { x: goal.x, z: goal.z };
       ai.path = planPath(D.x, D.z, goal.x, goal.z);
-      ai.wait = task === 'markers' ? 0 : task === 'notebook' ? 0.45 : task === 'board' ? 0.5 : 0.35;
+      ai.wait = task === 'markers' ? 0 : task === 'notebook' ? 0.45 : task === 'board' ? 0.5 : task === 'suit' ? 0.3 : 0.35;
     }
     const dGoal = Math.hypot(D.x - goal.x, D.z - goal.z);
-    const arrive = task === 'markers' ? 0.4 : task === 'crate' ? 0.35 : 0.5;
+    const arrive = task === 'markers' ? 0.4 : task === 'crate' ? 0.35 : task === 'suit' ? 0.35 : 0.5;
     if (dGoal > arrive + 0.25 && (!ai.path || !ai.path.length)) ai.path = planPath(D.x, D.z, goal.x, goal.z);
     if (dGoal > arrive && ai.path && ai.path.length) {
       let w = ai.path[0];
@@ -522,10 +577,12 @@ export class GarageTutorial {
     // arrived: face the thing, wait a believable beat, then act
     ai.path = null;
     const face = task === 'crate' ? this.crate : task === 'carry' || task === 'board' ? { x: LAYOUT.rvPark.x - 1.3, z: LAYOUT.use.sideDoor.z }
+      : task === 'suit' ? { x: LAYOUT.use.suit.doc.x, z: LAYOUT.room.minZ }
       : task === 'wait' || task === 'markers' ? { x: this.R.x, z: this.R.z } : LAYOUT.items.notebook;
     D.yaw += wrap(Math.atan2(face.x - D.x, face.z - D.z) - D.yaw) * Math.min(1, dt * 6);
     if (task === 'markers' || task === 'wait') return out;
     ai.wait -= dt;
+    if (task === 'suit') { out.hold = ai.wait <= 0; return out; }   // face the rack, a beat, then hold E
     if (ai.wait <= 0) { out.act = true; ai.wait = 0.8; }
     return out;
   }
@@ -533,7 +590,7 @@ export class GarageTutorial {
   // ── output ────────────────────────────────────────────────────────────────
   _worldAv(a) {
     const p = this.frame.toWorld(a.x, a.z);
-    return { x: r3(p.x), z: r3(p.z), yaw: r3(this.frame.yawToWorld(a.yaw)), speed: r3(a.speed), carry: a.carry, inRv: a.inRv, act: r3(a.act), y: r3(a.y), jt: r3(a.jt) };
+    return { x: r3(p.x), z: r3(p.z), yaw: r3(this.frame.yawToWorld(a.yaw)), speed: r3(a.speed), carry: a.carry, inRv: a.inRv, act: r3(a.act), y: r3(a.y), jt: r3(a.jt), suited: !!a.suited };
   }
   _target(who) {
     const U = LAYOUT.use;
@@ -541,6 +598,7 @@ export class GarageTutorial {
     let p = null;
     switch (task) {
       case 'markers': p = LAYOUT.markers[who]; break;
+      case 'suit': p = U.suit[who]; break;
       case 'keys': p = U.keys; break;
       case 'notebook': p = U.notebook; break;
       case 'plug': p = U.plug; break;
@@ -558,6 +616,7 @@ export class GarageTutorial {
     if (this.done || this.items.engine === 'on') return P.started;
     switch (task) {
       case 'markers': return P.markers;
+      case 'suit': return this.suitHold[who] > 0 ? P.suiting : P.suit;
       case 'wait': return `Wait for ${other}…`;
       case 'waitIn': return `In the RV — waiting for ${other}…`;
       case 'crank': return who === 'rook' ? (this.items.engine === 'cranking' ? P.cranking : P.crank) : P.crank;
@@ -568,6 +627,7 @@ export class GarageTutorial {
     const a = who === 'rook' ? this.R : this.D, U = LAYOUT.use;
     const task = who === 'rook' ? this._rookTask() : this._docTask();
     switch (task) {
+      case 'suit': return this._near(a, U.suit[who]);
       case 'keys': return this.complete.markers && this._near(a, U.keys);
       case 'notebook': return this.complete.markers && this._near(a, U.notebook);
       case 'plug': return this._near(a, U.plug);
@@ -591,7 +651,7 @@ export class GarageTutorial {
       skipped: this.skipped,
       rook: this._worldAv(this.R),
       doc: this._worldAv(this.D),
-      items: { ...this.items, door: r3(this.items.door) },
+      items: { ...this.items, door: r3(this.items.door), suits: [!this.R.suited, !this.D.suited] },   // suits: still on the rack [Rook's suit_0, Doc's suit_1]
       crate: { x: r3(cw.x), z: r3(cw.z), yaw: r3(this.frame.yawToWorld(this.crate.yaw)) },
       prompt: { rook: this._prompt('rook'), doc: this._prompt('doc') },
       task: { rook: this._rookTask(), doc: this._docTask() },
@@ -600,6 +660,7 @@ export class GarageTutorial {
       atMarker: { rook: this.R.atMarker, doc: this.D.atMarker },
       complete: { ...this.complete },
       hold: r3(this.caught ? 1 : this.hold / this.cfg.holdSeconds),
+      suitHold: { rook: r3(this.R.suited ? 1 : this.suitHold.rook / this.cfg.suitSeconds), doc: r3(this.D.suited ? 1 : this.suitHold.doc / this.cfg.suitSeconds) },
       solo: this.solo,
       fb: this.feedback.map((f) => ({ who: f.who, what: f.what, n: f.n })),
       frame: { ox: r3(this.frame.ox), oz: r3(this.frame.oz), rot: r3(this.frame.rot) },

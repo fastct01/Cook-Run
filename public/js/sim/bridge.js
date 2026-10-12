@@ -6,7 +6,8 @@
 //      vz = v cosθ, vy = v sinθ;  y(t) = h + vy t − g t²/2 = hL  →  t(v)
 //      need vz · t(v) ≥ gapLen + margin   (bisection on v)
 //  • Launch / land / fall callbacks from vehicle.js. Fall → respawn at
-//    checkpointZ in a forward lane, 0 speed, fallPenalty (rv hp, product units),
+//    checkpointZ in a forward lane, 0 speed, −rules.bridge.missDamage hp and
+//    −rules.bridge.missBags bags (difficulty levers; fallback route bridge.fallPenalty),
 //    cops cleared, respawnGrace seconds.
 //  • Passing the lip (in flight or landed beyond it) → cops give up for good.
 // Unity port: CanyonJump (MonoBehaviour) + static BridgeMath.SpeedNeeded().
@@ -60,11 +61,11 @@ export class BridgeSystem {
   }
 
   onFell() {
-    const sim = this.sim, b = this.b, rv = sim.rv, P = b.fallPenalty || {};
+    const sim = this.sim, b = this.b, rv = sim.rv, P = b.fallPenalty || {}, M = sim.rules.bridge || {};
     this.falls++;
     sim.emit({ type: 'fell' });
-    sim.damageRv(P.rvDamage ?? 30, 'fall');
-    const lost = Math.min(sim.inv.units, P.productLost ?? 1);
+    sim.damageRv(M.missDamage ?? P.rvDamage ?? 30, 'fall');
+    const lost = Math.min(sim.inv.units, Math.max(0, Math.round(M.missBags ?? P.productLost ?? 1)));
     if (lost > 0) { sim.inv.units -= lost; sim.inv.value = Math.max(0, sim.inv.value - lost * sim.avgUnitValue()); }
     if (sim.phase !== 'drive') return; // the fall wrecked the RV
     const z = b.checkpointZ;

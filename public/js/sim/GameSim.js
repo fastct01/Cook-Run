@@ -8,8 +8,11 @@
 //   sim.netSnapshot()            compact Snapshot (ents near the RV, numbers 2 dp) +
 //                                events drained from the NET queue
 //   sim.drainNetEvents()         → events since the last net drain
-//   sim.applyCookCommand(cmd)    CookCommand (protocol.js CMD): lab · roof* · avatar*
-//   sim.applyDriverCommand(cmd)  DCMD (driver-local): shopDone · shopAbort · skipTutorial
+//   sim.applyCookCommand(cmd)    CookCommand (protocol.js CMD): lab · shopEnter/shopDone/shopAbort ·
+//                                avatar* (the old cook roof* commands are ignored: the roof is Rook's)
+//   sim.applyDriverCommand(cmd)  DCMD (driver-local): shopEnter (solo) · shopDone · shopAbort ·
+//                                skipTutorial · defend/roofAim/roofFire/roofReload/roofSelect/roofThrow
+//                                (→ sim/roof.js command(); returns its result)
 //   sim.setLabState(lab)         LabState
 //   sim.phase, sim.result        'garage'|'countdown'|'drive'|'won'|'lost'; EndResult when over
 // Every emitted event goes to BOTH queues (local + net). Each queue is capped
@@ -76,10 +79,26 @@
 //   weather: 'clear'|'dust', train: null | { z, state, dist }, sell: { x, z, dist, radius },
 //   looted: [stopId], closed: [stopId], maxStars, redirect: s left of a cop redirect
 // }
-// Entity states: see protocol.js; cops 6 soaked, 7 stalled, 8 paint-blind; flashbang
-//   0 flying (y>0) · 1 armed on the ground · 2 burst, variant 0 flash · 1 foam.
+// Entity states: see protocol.js; cops 6 soaked, 7 stalled, 8 paint-blind, 9 tyre out,
+//   10 radiator (steaming); flashbang 0 flying (y>0) · 1 armed on the ground · 2 burst,
+//   variant 0 flash · 1 foam.
+//
+// ── Round 3 (ROUND3_CONTRACT.md) ─────────────────────────────────────────────────
+//   data.difficulty ('easy'|'hard'|'extreme', from shared/difficulty.js withDifficulty) →
+//     snapshot.difficulty, EndResult.difficulty + scoreMult (points × rules.scoring.mult).
+//   snapshot adds: rv.roofRook (Rook visible on the roof), rv.stopped (s nearly still),
+//     rv.roofDoc (always false now), crew.regen { driver, cook }, bustInfo { grace, armed,
+//     defended }, copFx [[id, holes, crack, tyreMask, steam]], stop.doc / stop.docShop / stop.held.
+//   Rook's roof (sim/roof.js, DEFEND): DCMD defend/roofAim/roofFire/roofReload/roofSelect/
+//     roofThrow → roof.command(cmd); the RV is held while roof.holdsRv (and stops.holdsRv()).
+//   Regen: hull, Rook and Doc each heal rules.rv.regenPerSec once rules.rv.regenDelay s have
+//     passed since that bar's own last damage; never from 0; Doc not while cookDown.
+//     EV.REGEN { on, bar: 'rv'|'driver'|'cook' }.
+//   Extra helpers: sim.rookOnRoof() → bool (Rook visible up there), sim.difficulty,
+//     sim.damageTaken { rv, driver, cook } (run totals; also EndResult.damageTaken).
 // ─────────────────────────────────────────────────────────────────────────────
 import { KIND_ID, EV } from '../shared/protocol.js';
+import { normDifficulty } from '../shared/difficulty.js';
 import { Track } from './track.js';
 import { Rng, hashSeed } from './rng.js';
 import { Road } from './road.js';
@@ -117,10 +136,24 @@ class StubGarage {
   constructor(sim) { this.sim = sim; this.done = true; }
   update() {} command() {} state() { return null; }
 }
-const ROOF_IDLE = Object.freeze({ active: false, aimYaw: 0, aimPitch: 0, spray: false, ammo: { firecracker: 0, balloon: 0, flare: 0 } });
+// Rook's roof when sim/roof.js is missing or broken: nobody climbs up (the DEFEND button stays off)
+function roofIdle() {
+  return {
+    active: false, climbing: false, climbDir: null, climb: 0, onRoof: false, ai: false,
+    available: false, why: null, nearCop: 999,
+    gun: 'revolver', slot: 'revolver', ads: false, aimYaw: Math.PI, aimPitch: -0.1,
+    reloading: 0, reloadT: 0, cooldown: 0,
+    mag: { revolver: 0, shotgun: 0, rifle: 0 }, reserve: { revolver: 0, shotgun: 0, rifle: 0 },
+    throwables: { firecracker: 0, balloon: 0, flare: 0 }, fx: [],
+  };
+}
 class StubRoof {
   constructor(sim) { this.sim = sim; this.active = false; }
-  command() {} update() {} state() { return { ...ROOF_IDLE, ammo: { ...ROOF_IDLE.ammo } }; }
+  get holdsRv() { return false; }
+  get roofRook() { return false; }
+  get onRoof() { return false; }
+  get climb() { return 0; }
+  command() { return false; } update() {} state() { return roofIdle(); }
 }
 const SetPieceHostCls = HOST_MOD?.SetPieceHost ?? NullSetPieceHost;
 const GarageCls = GARAGE_MOD?.GarageTutorial ?? StubGarage;
@@ -132,7 +165,12 @@ const NO_INPUT = Object.freeze({ throttle: 0, steer: 0, handbrake: false, horn: 
 const HOLD_INPUT = Object.freeze({ ...NO_INPUT, handbrake: true });
 const FX_DECAY = { fog: 0.45, flash: 1.4, shock: 2.2 };
 const FX_KEYS = ['fog', 'flash', 'shock'];
-const ROOF_CMDS = new Set(['roofEnter', 'roofLeave', 'roofAim', 'roofThrow']);
+// the old cook-side roof commands (Doc's hose): retired in Round 3 — the roof is Rook's now
+const COOK_ROOF_CMDS = new Set(['roofEnter', 'roofLeave', 'roofAim', 'roofThrow']);
+// Rook's roof (DCMD, driver-local) → roof.command(cmd)
+const DRIVER_ROOF_CMDS = new Set(['defend', 'roofAim', 'roofFire', 'roofReload', 'roofSelect', 'roofThrow']);
+// Doc's shop run (CMD from the cook; 'shopEnter' also as a DCMD for solo)
+const COOK_SHOP_CMDS = new Set(['shopEnter', 'shopDone', 'shopAbort']);
 const AVATAR_CMDS = new Set(['avatarMove', 'avatarAct', 'avatarJump']);
 
 export class GameSim {
@@ -142,6 +180,7 @@ export class GameSim {
     this.rules = data.rules;
     this.seed = (opts.seed ?? data.route.defaultSeed ?? 1) >>> 0;
     this.solo = !!opts.solo;
+    this.difficulty = normDifficulty(data.difficulty);
     this.cfg = buildSimConfig(data.rules);
     this.g = data.route.bridge?.gravity ?? 9.81;
     this.track = new Track(data.route, this.seed);
@@ -170,13 +209,17 @@ export class GameSim {
     this.stepCount = 0;
     this.fx = { fog: 0, flash: 0, shock: 0 };
     this._fxHold = { fog: 0, flash: 0, shock: 0 };
-    this.lastDamageT = -999;
+    this.lastDamageT = -999;        // hull
+    this.lastDriverDamageT = -999;  // Rook
+    this.lastCookDamageT = -999;    // Doc (stamped by labLink.hurtCook)
     this.falls = 0;
     this._spCols = [];
     this._spHit = new Map();
 
     const R = this.rules.rv;
     this.crew = { driver: R.crewMaxHp, cook: R.crewMaxHp, cookDown: false };
+    this.crewRegen = { driver: false, cook: false };
+    this.damageTaken = { rv: 0, driver: 0, cook: 0 };   // totals this run (tests / end screen extras)
     this.score = { points: 0, chaos: 0, knocked: 0, smashed: 0, copsWrecked: 0 };
     const sg = this.cfg.startGadgets || {};
     this.inv = {
@@ -250,7 +293,10 @@ export class GameSim {
     try { return this.garage.state() ?? null; } catch (e) { this._plugErr('garage.state', e); return null; }
   }
   _roofState() {
-    try { return this.roof.state(); } catch (e) { this._plugErr('roof.state', e); return { ...ROOF_IDLE, ammo: { ...ROOF_IDLE.ammo } }; }
+    try { return this.roof.state() ?? roofIdle(); } catch (e) { this._plugErr('roof.state', e); return roofIdle(); }
+  }
+  _roofFlag(name) {
+    try { return !!this.roof[name]; } catch (e) { this._plugErr('roof.' + name, e); return false; }
   }
   _endGarage() {
     if (this.phase !== 'garage') return;
@@ -270,9 +316,20 @@ export class GameSim {
 
   applyCookCommand(cmd) {
     if (!cmd || typeof cmd !== 'object') return;
-    if (ROOF_CMDS.has(cmd.type)) { try { this.roof.command(cmd); } catch (e) { this._plugErr('roof.command', e); } return; }
+    if (COOK_ROOF_CMDS.has(cmd.type)) return;   // retired: Doc no longer climbs onto the roof
+    if (COOK_SHOP_CMDS.has(cmd.type)) { this._shopCommand(cmd); return; }
     if (AVATAR_CMDS.has(cmd.type)) { if (this.garage) { try { this.garage.command(cmd); } catch (e) { this._plugErr('garage.command', e); } } return; }
     this.labLink.apply(cmd);
+  }
+  _shopCommand(cmd) {
+    if (this.phase !== 'drive') return false;
+    const id = cmd.stopId ?? null;
+    switch (cmd.type) {
+      case 'shopEnter': return this.stops.shopEnter(id);
+      case 'shopDone': return this.stops.shopDone(id, cmd.score);
+      case 'shopAbort': return this.stops.shopAbort(id);
+      default: return false;
+    }
   }
   setLabState(lab) { this.labLink.setLabState(lab); }
 
@@ -286,9 +343,12 @@ export class GameSim {
         this._endGarage();
         this.emit({ type: 'tutorial', step: -1, stepId: 'skipped' });
         return true;
-      case 'shopDone': return this.stops.shopDone(cmd.stopId ?? null, cmd.score);
-      case 'shopAbort': return this.stops.shopAbort(cmd.stopId ?? null);
-      default: return false;
+      case 'shopEnter': case 'shopDone': case 'shopAbort': return this._shopCommand(cmd);
+      default:
+        if (DRIVER_ROOF_CMDS.has(cmd.type)) {
+          try { return this.roof.command(cmd) ?? false; } catch (e) { this._plugErr('roof.command', e); return false; }
+        }
+        return false;
     }
   }
 
@@ -314,7 +374,7 @@ export class GameSim {
       const d = (e) => { const dx = e[2] - rv.x, dz = e[4] - rv.z; return dx * dx + dz * dz * (dz < 0 ? 2 : 1); };
       ents = ents.map((e) => [d(e), e]).sort((a, b) => a[0] - b[0] || a[1][0] - b[1][0]).slice(0, max).map((p) => p[1]);
     }
-    return roundDeep(this._buildSnapshot(ents, this.drainNetEvents()));
+    return roundDeep(this._buildSnapshot(ents, this.drainNetEvents(), new Set(ents.map((e) => e[0]))));
   }
 
   // ── helper API (see header) ──────────────────────────────────────────────────
@@ -335,6 +395,7 @@ export class GameSim {
     if (!(amount > 0) || this.phase !== 'drive') return;
     const rv = this.rv;
     if (rv.grace > 0 && cause !== 'fall') return;
+    this.damageTaken.rv += Math.min(rv.hp, amount);
     rv.hp = Math.max(0, rv.hp - amount);
     this.lastDamageT = this.t;
     if (rv.hp <= 0) { this.lose('wrecked'); return; }   // the blast beats the crew's bruises: it's a wreck
@@ -430,11 +491,16 @@ export class GameSim {
 
   hurtDriver(v) {
     if (!(v > 0) || this.phase !== 'drive') return;
+    this.damageTaken.driver += Math.min(this.crew.driver, v);
     this.crew.driver = Math.max(0, this.crew.driver - v);
+    this.lastDriverDamageT = this.t;
     if (this.crew.driver <= 0) this.lose('crewDown');
   }
 
   isNearSell(x, z, extra = 0) { return this.stops.isNearSell(x, z, extra); }
+
+  // Rook is visible up on the roof (climb > 0.5) — cops return fire at him
+  rookOnRoof() { return this._roofFlag('roofRook'); }
   avgUnitValue() { return this.inv.units > 0 ? this.inv.value / this.inv.units : 0; }
 
   lose(reason) {
@@ -518,7 +584,7 @@ export class GameSim {
     } else if (this.phase === 'drive') this.driveTime += dt;
     if (rv.grace > 0) rv.grace = Math.max(0, rv.grace - dt);
 
-    const held = this.stops.holdsRv();
+    const held = this.stops.holdsRv() || (this.phase === 'drive' && this._roofFlag('holdsRv'));
     if (this.phase === 'drive' && !held) {
       this.gadgets.handleInput(input);
       if (input.reset) this._resetRv();
@@ -546,7 +612,8 @@ export class GameSim {
     this.bridgeSys.update(dt);
     this.stops.update(dt);
     if (this.phase === 'drive') { try { this.roof.update(dt); } catch (e) { this._plugErr('roof.update', e); } }
-    rv.roofDoc = !!(this.roof.roofDoc ?? this.roof.active);
+    rv.roofRook = this._roofFlag('roofRook');
+    rv.roofDoc = false;   // Round 3: Doc never climbs up
     this.heat.update(dt);
     this.labLink.update(dt);
     this._regen(dt);
@@ -579,12 +646,22 @@ export class GameSim {
     }
   }
 
+  // All three bars regenerate (Round 3): each heals regenPerSec once regenDelay s have passed
+  // since ITS OWN last damage; never from 0 (a wreck / a downed crew member stays down).
   _regen(dt) {
-    const R = this.rules.rv, rv = this.rv;
-    const rate = R.regenPerSec ?? 0;
-    const on = this.phase === 'drive' && rate > 0 && rv.hp > 0 && rv.hp < R.maxHp && this.t - this.lastDamageT >= (R.regenDelay ?? 10);
-    if (on) rv.hp = Math.min(R.maxHp, rv.hp + rate * dt);
-    if (on !== rv.regen) { rv.regen = on; this.emit({ type: 'regen', on }); }
+    const R = this.rules.rv, rv = this.rv, crew = this.crew;
+    const rate = R.regenPerSec ?? 0.3, delay = R.regenDelay ?? 10;
+    const drive = this.phase === 'drive' && rate > 0;
+    const maxHp = R.maxHp ?? 100, maxCrew = R.crewMaxHp ?? 100;
+    const onRv = drive && rv.hp > 0 && rv.hp < maxHp && this.t - this.lastDamageT >= delay;
+    if (onRv) rv.hp = Math.min(maxHp, rv.hp + rate * dt);
+    if (onRv !== !!rv.regen) { rv.regen = onRv; this.emit({ type: 'regen', on: onRv, bar: 'rv' }); }
+    const onD = drive && crew.driver > 0 && crew.driver < maxCrew && this.t - this.lastDriverDamageT >= delay;
+    if (onD) crew.driver = Math.min(maxCrew, crew.driver + rate * dt);
+    if (onD !== this.crewRegen.driver) { this.crewRegen.driver = onD; this.emit({ type: 'regen', on: onD, bar: 'driver' }); }
+    const onC = drive && !crew.cookDown && crew.cook > 0 && crew.cook < maxCrew && this.t - this.lastCookDamageT >= delay;
+    if (onC) crew.cook = Math.min(maxCrew, crew.cook + rate * dt);
+    if (onC !== this.crewRegen.cook) { this.crewRegen.cook = onC; this.emit({ type: 'regen', on: onC, bar: 'cook' }); }
   }
 
   timeOfDay() {
@@ -830,7 +907,7 @@ export class GameSim {
     return out;
   }
 
-  _buildSnapshot(ents, events) {
+  _buildSnapshot(ents, events, copIds = null) {
     const rv = this.rv, R = this.rules.rv, heat = this.heat, inv = this.inv, br = this.route.bridge;
     const tr = this.events.trainInfo();
     const sp = this.stops.sell;
@@ -847,12 +924,14 @@ export class GameSim {
         x: rv.x, y: rv.y, z: rv.z, yaw: rv.yaw, pitch: rv.pitch, roll: rv.roll, speed: rv.speed, steer: rv.steer,
         hp: rv.hp, airborne: rv.airborne, nitro: clamp(rv.nitroT / (R.nitroSeconds || 1), 0, 1), flatTyre: rv.flatT > 0,
         onRoad: rv.onRoad, zone: rv.zone, drift: rv.drift, handbrake: !!rv.handbrake, horn: !!rv.horn, grace: rv.grace,
-        regen: !!rv.regen, roofDoc: !!rv.roofDoc, slip: rv.slipT > 0, foam: rv.foamT > 0, shock: rv.shockT > 0,
+        regen: !!rv.regen, roofDoc: false, roofRook: !!rv.roofRook, stopped: rv.stopped || 0,
+        slip: rv.slipT > 0, foam: rv.foamT > 0, shock: rv.shockT > 0,
         ...(rv.wrecked ? { wrecked: true } : null),
       },
-      crew: { driver: this.crew.driver, cook: this.crew.cook, cookDown: this.crew.cookDown },
+      crew: { driver: this.crew.driver, cook: this.crew.cook, cookDown: this.crew.cookDown, regen: { driver: this.crewRegen.driver, cook: this.crewRegen.cook } },
       heat: { value: heat.value, stars: heat.stars, seen: heat.seen, gaveUp: heat.gaveUp, unseen: Math.min(99, heat.unseenT) },
       bust: heat.bust,
+      bustInfo: heat.info(),
       score: { ...this.score },
       inv: { mat: { ...inv.mat }, units: inv.units, quality: inv.quality, gadgets: { ...inv.gadgets }, value: inv.value },
       stop: this.stops.stopInfo(),
@@ -864,6 +943,7 @@ export class GameSim {
       biome: this.biomeId,
       area: { id: biome.id, name: biome.name },
       timeOfDay: this.timeOfDay(),
+      difficulty: this.difficulty,
       dist: rv.z,
       routeLength: this.route.routeLength,
       feel: { latAcc: this.feel.latAcc, bump: this.feel.bump, speed: this.feel.speed },
@@ -879,6 +959,7 @@ export class GameSim {
       maxStars: heat.maxStars,
       redirect: this.cops.redirect ? this.cops.redirect.t : 0,
       setpieces,
+      copFx: this.cops.copFx(copIds),
       ents,
       events,
     };

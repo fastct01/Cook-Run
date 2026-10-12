@@ -787,7 +787,7 @@
     "goal": "Grab the 3 items on the list while the clerk is on the phone. Stay out of the camera cones.",
     "interior": "shop_hardware_interior",
     "items": 3,
-    "timeLimit": 60
+    "timeLimit": 35
    }
   },
   {
@@ -809,7 +809,7 @@
     "title": "Haggle",
     "goal": "Stop the swinging price needle in the green to get two jars for one, then carry the crates out.",
     "rounds": 3,
-    "timeLimit": 50
+    "timeLimit": 30
    }
   },
   {
@@ -830,7 +830,7 @@
     "type": "forklift",
     "title": "Forklift run",
     "goal": "Drive the forklift and set the pallet on the RV's rear rack.",
-    "timeLimit": 70
+    "timeLimit": 42
    }
   },
   {
@@ -851,7 +851,7 @@
     "type": "pump",
     "title": "Pump & ice",
     "goal": "Stop the pump meter on the line, then bag the ice before it melts.",
-    "timeLimit": 45
+    "timeLimit": 27
    }
   },
   {
@@ -876,7 +876,7 @@
     "goal": "Push the trolley through the aisles and grab 4 items. Dodge the staff and the wet floor, then self-checkout.",
     "interior": "shop_hardware_interior",
     "items": 4,
-    "timeLimit": 70
+    "timeLimit": 42
    }
   },
   {
@@ -897,7 +897,7 @@
     "type": "goat",
     "title": "Catch the goat",
     "goal": "The goat ate the syrup label. Corner it in the barn, then load the feed sacks.",
-    "timeLimit": 60
+    "timeLimit": 36
    }
   },
   {
@@ -918,7 +918,7 @@
     "type": "crane",
     "title": "Magnet crane",
     "goal": "Fish the copper coil out of the scrap pile with the magnet crane.",
-    "timeLimit": 60
+    "timeLimit": 36
    }
   },
   {
@@ -940,7 +940,7 @@
     "type": "alarm",
     "title": "Silent alarm",
     "goal": "Grab the solvent from the stockroom before the silent alarm timer runs out. It trips anyway: run!",
-    "timeLimit": 40
+    "timeLimit": 24
    },
    "alarm": 2.6
   }

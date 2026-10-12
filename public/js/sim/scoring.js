@@ -9,6 +9,9 @@
 //  • payout = Σ units × perUnitValue × quality × recipe.valueMult (tracked as a
 //    running `inv.value` when product is added). Rating 1..3 stars: points ≥
 //    rules.scoring.stars[i] for i = 0,1,2 (default [0, 3000, 5000]); 0 when lost.
+//  • Round 3: EndResult.points is multiplied by rules.scoring.mult (difficulty: Easy 0.75,
+//    Hard 1, Extreme 1.5); EndResult gains difficulty and scoreMult. The rating uses the
+//    multiplied points. breakdown.raw keeps the un-multiplied total.
 // Unity port: ScoreKeeper.
 // ─────────────────────────────────────────────────────────────────────────────
 export class ScoringSystem {
@@ -40,7 +43,9 @@ export class ScoringSystem {
     const payout = won ? Math.round(inv.value) : 0;
     const timeBonus = won ? Math.max(0, Math.round((S.parTimeSeconds - timeSec) * S.timeBonusPerSecUnder)) : 0;
     const noKnock = won && score.knocked === 0 ? S.noKnockBonus : 0;
-    const points = Math.round(score.points + payout / 10 + timeBonus + noKnock);
+    const mult = Number.isFinite(+S.mult) && +S.mult > 0 ? +S.mult : 1;
+    const raw = Math.round(score.points + payout / 10 + timeBonus + noKnock);
+    const points = Math.round(raw * mult);
     let stars = 0;
     if (won) {
       const th = S.stars || C.ratingPoints || [0, 3000, 5000];
@@ -51,10 +56,12 @@ export class ScoringSystem {
     return {
       won, reason, units: inv.units, quality: Math.round(inv.quality * 100) / 100, payout, points,
       chaos: score.chaos, knocked: score.knocked, timeSec: Math.round(timeSec * 10) / 10, stars,
+      difficulty: sim.difficulty ?? 'hard', scoreMult: mult,
       // extras (not in the base EndResult contract, safe to ignore)
-      breakdown: { base: Math.round(score.points), payoutPts: Math.round(payout / 10), timeBonus, noKnockBonus: noKnock, smooth: this.smoothPts },
+      breakdown: { base: Math.round(score.points), payoutPts: Math.round(payout / 10), timeBonus, noKnockBonus: noKnock, smooth: this.smoothPts, raw, mult },
       smashed: score.smashed, copsWrecked: score.copsWrecked, maxStars: sim.heat.maxStars,
       stopsLooted: sim.stops.lootedCount(), rvHp: Math.round(sim.rv.hp),
+      damageTaken: sim.damageTaken ? { rv: Math.round(sim.damageTaken.rv), driver: Math.round(sim.damageTaken.driver), cook: Math.round(sim.damageTaken.cook) } : undefined,
     };
   }
 }

@@ -7,11 +7,14 @@
 //  • calm decay: even while seen, after calmDelay s without a new incident heat
 //    bleeds off at calmDecayPerSec (rules.sim.heatExtra) — the cops lose interest.
 //  • After the bridge lip: gaveUp → value 0 forever.
-//  • Bust meter: any chasing cop within bust.radius while RV speed < maxRvSpeed
-//    fills it over bust.seconds (decays otherwise); full → phase lost 'busted'.
-//    Only un-disabled cops count (state 1): soaked (6), stalled (7), paint-blind (8),
-//    smoke-blind (2) and spun-out (3) cops neither see nor bust. This still applies while
-//    the RV is parked at a supply stop (the roof defence keeps them off).
+//  • Bust meter (Round 3): rv.stopped accumulates while |speed| < bust.maxRvSpeed (4) and the
+//    RV is on the ground (any faster frame resets it). The meter may fill only once
+//    stopped ≥ bust.grace (Hard 3 s; bustInfo.armed) AND a running cop (state 1, not
+//    redirected) is within bust.radius; it fills over bust.seconds (Hard 4 s) and drains at
+//    decayPerSec; full → phase lost 'busted'. Soaked (6), stalled (7), paint-blind (8),
+//    smoke-blind (2), spun-out (3), tyre-out (9) and steaming (10) cops neither see nor bust.
+//    This applies at supply stops too (Rook's roof defence keeps them off).
+//    bustInfo { grace: s left before the meter may fill, armed, defended: sim.roof.onRoof }.
 // Unity port: HeatManager (singleton MonoBehaviour).
 // ─────────────────────────────────────────────────────────────────────────────
 import { clamp } from './util.js';
@@ -28,6 +31,15 @@ export class HeatSystem {
     this.gaveUp = false;
     this.bust = 0;
     this.calmT = 0;   // seconds since the last witnessed incident
+    this.armed = false;     // RV stopped for longer than bust.grace
+    this.graceLeft = 0;     // s until the meter may fill (bustInfo.grace)
+  }
+
+  // Round 3 bust snapshot block: { grace, armed, defended }
+  info() {
+    let defended = false;
+    try { defended = !!this.sim.roof?.onRoof; } catch (e) { defended = false; }
+    return { grace: this.graceLeft, armed: this.armed, defended };
   }
 
   get max() { return (this.H.maxStars ?? 5) + 0.99; }
@@ -76,7 +88,7 @@ export class HeatSystem {
       const R2 = H.copSightRange * H.copSightRange;
       for (const c of sim.cops.cops) {
         if (c.kind === 'heli') { if (c.state === 1) seen = true; continue; }
-        if (c.state !== 1 && c.state !== 0) continue;   // smoke/oil/soaked/stalled/paint-blind cops can't see
+        if (c.state !== 1 && c.state !== 0) continue;   // smoke/oil/soaked/stalled/paint-blind/tyre-out/steaming cops can't see
         if (c.state === 0 && !c.parked) continue;
         if (c.redirected) continue;                       // busy chasing someone else (the Comet)
         const dx = c.x - rv.x, dz = c.z - rv.z;
@@ -85,6 +97,8 @@ export class HeatSystem {
     }
     this.seen = seen;
     if (seen) this.unseenT = 0; else this.unseenT += dt;
+    // someone called the RV in at a supply stop: the police know where it is until the response arrives
+    if (!this.gaveUp && sim.cops.calledIn?.()) { this.unseenT = 0; this.calmT = 0; }
     const heli = sim.cops.hasHeli() && !dust;
     this.calmT += dt;
     const X = sim.cfg.heatExtra;
@@ -95,19 +109,24 @@ export class HeatSystem {
       this.value = Math.max(0, this.value - X.calmDecayPerSec * dt);
       this._syncStars();
     }
-    // bust meter
-    const B = H.bust;
+    // bust meter: stopped for longer than the grace + a running cop close by
+    const B = H.bust || {};
+    const maxV = B.maxRvSpeed ?? 4, grace = B.grace ?? 3, secs = B.seconds ?? 4, radius = B.radius ?? 7.5;
+    if (sim.phase === 'drive' && !rv.airborne && Math.abs(rv.speed) < maxV) rv.stopped = (rv.stopped || 0) + dt;
+    else rv.stopped = 0;
+    this.armed = sim.phase === 'drive' && rv.stopped >= grace;
+    this.graceLeft = sim.phase === 'drive' && rv.stopped > 0 ? Math.max(0, grace - rv.stopped) : grace;
     let close = false;
-    if (sim.phase === 'drive' && rv.grace <= 0 && Math.abs(rv.speed) < B.maxRvSpeed && !rv.airborne) {
-      const R2 = B.radius * B.radius;
+    if (this.armed && rv.grace <= 0) {
+      const R2 = radius * radius;
       for (const c of sim.cops.cops) {
         if (c.kind === 'heli' || c.state !== 1 || c.redirected) continue;
         const dx = c.x - rv.x, dz = c.z - rv.z;
         if (dx * dx + dz * dz < R2) { close = true; break; }
       }
     }
-    if (close) this.bust = Math.min(1, this.bust + dt / B.seconds);
-    else this.bust = Math.max(0, this.bust - B.decayPerSec * dt);
+    if (close) this.bust = Math.min(1, this.bust + dt / Math.max(0.1, secs));
+    else this.bust = Math.max(0, this.bust - (B.decayPerSec ?? 0.6) * dt);
     if (this.bust >= 1 && sim.phase === 'drive') sim.lose('busted');
   }
 }

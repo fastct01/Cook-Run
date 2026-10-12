@@ -9,7 +9,8 @@
 // unit-tested and ported (e.g. to a Unity relay / Netcode transport) easily.
 //
 // Wire contract: public/js/shared/protocol.js. Extensions are documented in
-// docs/NOTES-net.md ({t:'lobby'}, role:'swap', ROOM.state, ERROR.code/re).
+// docs/NOTES-net.md ({t:'lobby'}, role:'swap', ROOM.state, ERROR.code/re) and
+// docs/NOTES-r3-build-lobby.md (Round 3: C2S.SETTINGS {difficulty}, ROOM/START.difficulty).
 
 import { randomInt, randomBytes } from 'node:crypto';
 
@@ -19,6 +20,11 @@ export const CODE_LENGTH = 4;
 const CODE_RE = new RegExp(`^[${CODE_ALPHABET}]{${CODE_LENGTH}}$`);
 
 export const ROLES = ['driver', 'cook'];
+
+// Round 3 difficulty (ROUND3_CONTRACT.md §Lobby). Kept local on purpose: the relay never imports
+// game code, so a client-side change can't take the server down. Same ids as shared/difficulty.js.
+export const DIFFICULTIES = Object.freeze(['easy', 'hard', 'extreme']);
+export const DEFAULT_DIFFICULTY = 'hard';
 
 export const DEFAULT_LIMITS = Object.freeze({
   maxPlayers: 2,
@@ -120,6 +126,7 @@ export class RoomManager {
       case 'start': return this._onStart(client, msg);
       case 'lobby': return this._onLobby(client, msg);
       case 'leave': return this._onLeave(client, msg);
+      case 'settings': return this._onSettings(client, msg);
       default: return this._error(client, `Unknown message type "${String(msg.t).slice(0, 16)}".`, 'badRequest', msg.t);
     }
   }
@@ -138,7 +145,7 @@ export class RoomManager {
     const code = this._newCode();
     if (!code) return this._error(client, 'Could not allocate a room code. Try again.', 'serverFull', 'create');
     const t = this.now();
-    const room = { code, hostId: client.id, players: new Map(), state: 'lobby', createdAt: t, lastActive: t, seed: null, games: 0 };
+    const room = { code, hostId: client.id, players: new Map(), state: 'lobby', createdAt: t, lastActive: t, seed: null, games: 0, difficulty: DEFAULT_DIFFICULTY };
     this.rooms.set(code, room);
     client.name = sanitizeName(msg.name, this.limits.nameMax) || 'Player 1';
     this._addPlayer(room, client, 'driver');
@@ -216,8 +223,8 @@ export class RoomManager {
     room.lastActive = this.now();
     const roles = {};
     for (const p of room.players.values()) roles[p.id] = p.role;
-    this.log(`[room] ${room.code} start #${room.games} seed=${room.seed}`);
-    for (const p of room.players.values()) this._send(p.client, { t: 'start', seed: room.seed, roles });
+    this.log(`[room] ${room.code} start #${room.games} seed=${room.seed} difficulty=${room.difficulty}`);
+    for (const p of room.players.values()) this._send(p.client, { t: 'start', seed: room.seed, roles, difficulty: room.difficulty });
     this._broadcastRoom(room); // state:'playing' (keeps NetClient.room current)
   }
 
@@ -236,6 +243,24 @@ export class RoomManager {
 
   _onLeave(client) {
     if (client.room) this._leaveRoom(client, 'left');
+  }
+
+  // C2S.SETTINGS { difficulty }: the host (the room's creator, or whoever inherited the room) picks the
+  // difficulty while the room is in the lobby. Locked once START has been sent; {t:'lobby'} unlocks it
+  // again for the next run. Changes nothing else (ready flags and roles stay as they are).
+  _onSettings(client, msg) {
+    const room = client.room;
+    if (!room) return this._error(client, 'You are not in a room.', 'noRoom', 'settings');
+    if (room.hostId !== client.id) return this._error(client, 'Only the room host can change the difficulty.', 'notHost', 'settings');
+    if (room.state !== 'lobby') return this._error(client, 'The difficulty is locked while a run is going.', 'started', 'settings');
+    const d = msg.difficulty;
+    if (typeof d !== 'string' || !DIFFICULTIES.includes(d)) {
+      return this._error(client, 'Unknown difficulty. Pick easy, hard or extreme.', 'badRequest', 'settings');
+    }
+    if (room.difficulty === d) return this._sendRoom(room, client);
+    room.difficulty = d;
+    this.log(`[room] ${room.code} difficulty → ${d}`);
+    this._broadcastRoom(room);
   }
 
   _onGame(client, msg) {
@@ -286,6 +311,7 @@ export class RoomManager {
       you,
       hostId: room.hostId,
       state: room.state,
+      difficulty: room.difficulty || DEFAULT_DIFFICULTY,
       players: [...room.players.values()].map((p) => ({ id: p.id, name: p.client.name, role: p.role, ready: p.ready })),
     };
   }

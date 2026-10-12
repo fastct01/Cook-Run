@@ -19,6 +19,10 @@
 //  • Cook at 0 hp → crew.cookDown = true: cook commands are ignored (startRecipe
 //    gets recipeDenied 'Doc is out cold') — not game over; after cookReviveSeconds
 //    (12 s, matches CookLab) Doc is back with cookReviveHp (25).
+//  • Round 3: LabState.shop (Doc's shop-run progress, 6 Hz while he's in a shop:
+//    { stopId, label, frac, tLeft }) is kept in `shop` → snapshot stop.docShop. hurtCook()
+//    stamps sim.lastCookDamageT (Doc's own regen timer). The host-side fallback fume/fire
+//    damage is scaled by rules.cook.hurtMult (CookLab scales its own cookHurt).
 // Unity port: LabLink (MonoBehaviour on the RV) receiving CookCommand structs.
 // ─────────────────────────────────────────────────────────────────────────────
 import { clamp } from './util.js';
@@ -34,6 +38,7 @@ export class LabLink {
     this.batches = 0;
     this.unitsCooked = 0;
     this.labReportsHurt = false; // true once a LabState carried a numeric cookHurt
+    this.shop = null;            // LabState.shop → snapshot stop.docShop
   }
 
   setLabState(l) {
@@ -45,6 +50,7 @@ export class LabLink {
       ventOpen: !!l.ventOpen, curtains: !!l.curtains, cookHurt: +l.cookHurt || 0,
     };
     if (typeof l.cookHurt === 'number') this.labReportsHurt = true;
+    this.shop = sanitizeShop(l.shop);
     if (sim.lab.cookHurt > 0 && sim.phase === 'drive') this.hurtCook(sim.lab.cookHurt);
   }
 
@@ -56,6 +62,7 @@ export class LabLink {
       this.downT -= dt;
       if (this.downT <= 0 && sim.phase === 'drive') {
         crew.cookDown = false; crew.cook = C.cookReviveHp;
+        sim.lastCookDamageT = sim.t;   // back on his feet: Doc's regen starts after the usual delay
         sim.emit({ type: 'msg', text: 'Doc is back on his feet.', tone: 'info' });
       }
     }
@@ -63,7 +70,7 @@ export class LabLink {
     const rv = sim.rv;
     let best = Infinity;
     for (const c of sim.cops.cops) {
-      if (c.state === 4 || c.state === 5) continue;
+      if (c.state === 4 || c.state === 5 || c.state === 9 || c.state === 10) continue;   // wrecked / gave up / tyre out / steaming
       const dx = c.x - rv.x, dz = c.z - rv.z, dy = c.kind === 'heli' ? (c.y - rv.y) : 0;
       const d = Math.sqrt(dx * dx + dz * dz + dy * dy);
       if (d < best) best = d;
@@ -73,13 +80,14 @@ export class LabLink {
     if (sim.phase !== 'drive' || !L) return;
     // hazards
     const hostCook = C.hostCookDamage || !this.labReportsHurt;
+    const hurtMult = sim.rules.cook?.hurtMult ?? 1;
     if (L.fumes > H.fumesHurtAbove) {
-      if (hostCook) this.hurtCook(H.fumesCookDamagePerSec * dt);
+      if (hostCook) this.hurtCook(H.fumesCookDamagePerSec * hurtMult * dt);
       sim.hurtDriver(H.fumesDriverDamagePerSec * dt);
     }
     if (L.fire > 0) {
       sim.damageRv(H.fireRvDamagePerSec * L.fire * dt, 'fire', true);
-      if (hostCook) this.hurtCook(H.fireCookDamagePerSec * L.fire * dt);
+      if (hostCook) this.hurtCook(H.fireCookDamagePerSec * hurtMult * L.fire * dt);
     }
     if (L.ventOpen && L.cooking) {
       const rate = sim.rules.heat.sources.ventSmokePerSec ?? H.ventSmokeHeatPerSec;
@@ -96,7 +104,9 @@ export class LabLink {
   hurtCook(v) {
     const sim = this.sim, crew = sim.crew;
     if (crew.cookDown || !(v > 0)) return;
+    if (sim.damageTaken) sim.damageTaken.cook += Math.min(crew.cook, v);
     crew.cook = Math.max(0, crew.cook - v);
+    sim.lastCookDamageT = sim.t;
     if (crew.cook <= 0) {
       crew.cookDown = true;
       this.downT = sim.cfg.lab.cookReviveSeconds;
@@ -185,4 +195,11 @@ export class LabLink {
       }
     }
   }
+}
+
+// LabState.shop → { stopId, label, frac 0..1, tLeft s } | null (numbers clamped, label ≤ 60 chars)
+function sanitizeShop(x) {
+  if (!x || typeof x !== 'object') return null;
+  const frac = clamp(+x.frac || 0, 0, 1), tLeft = Math.max(0, +x.tLeft || 0);
+  return { stopId: x.stopId != null ? String(x.stopId) : null, label: String(x.label ?? '').slice(0, 60), frac, tLeft };
 }

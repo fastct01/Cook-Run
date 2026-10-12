@@ -16,12 +16,13 @@ export const C2S = Object.freeze({
   LEAVE: 'leave',        // { t }
   GAME: 'g',             // { t, m: GameMsg }  relayed verbatim to the other player in the room
   PING: 'ping',          // { t, at }
+  SETTINGS: 'settings',  // { t, difficulty: 'easy'|'hard'|'extreme' }   (room creator only, before START) — Round 3
 });
 // S→C
 export const S2C = Object.freeze({
-  ROOM: 'room',          // { t, code, you: playerId, hostId, players: [{id,name,role,ready}] }
+  ROOM: 'room',          // { t, code, you: playerId, hostId, players: [{id,name,role,ready}], difficulty }
   ERROR: 'error',        // { t, msg }
-  START: 'start',        // { t, seed, roles: { [playerId]: role } }
+  START: 'start',        // { t, seed, roles: { [playerId]: role }, difficulty }
   PEER_LEFT: 'peerLeft', // { t, id }
   GAME: 'g',             // { t, m: GameMsg, from }
   PONG: 'pong',          // { t, at }
@@ -52,6 +53,11 @@ export const CMD = Object.freeze({
   AVATAR_MOVE: 'avatarMove',   // { type, mx, mz, run }           garage tutorial: Doc's world-space move vector (-1..1), ~15 Hz
   AVATAR_ACT: 'avatarAct',     // { type }                         garage tutorial: Doc presses E (pick up / use / get in)
   AVATAR_JUMP: 'avatarJump',   // { type }                         garage tutorial: Doc presses Space (jump)
+  // ── Round 3 (ROUND3_CONTRACT.md): Doc does the shop run; Rook defends. roofEnter/Leave/Aim/Throw above are
+  //    retired for the cook (the roof belongs to Rook now) — the host ignores them from the cook.
+  SHOP_ENTER: 'shopEnter',     // { type, stopId }                 Doc jumped out of the side door: the shop run started
+  SHOP_DONE: 'shopDone',       // { type, stopId, score: 0..1 }    Doc finished the shop task
+  SHOP_ABORT: 'shopAbort',     // { type, stopId }                 Doc gave up (or timed out on his side) and runs back
 });
 
 // Driver-side commands (host-local, never sent over the network): sim.applyDriverCommand(cmd)
@@ -59,6 +65,14 @@ export const DCMD = Object.freeze({
   SHOP_DONE: 'shopDone',       // { type, stopId, score: 0..1 }    shop challenge finished
   SHOP_ABORT: 'shopAbort',     // { type, stopId }                 Rook gave up and runs back to the RV
   SKIP_TUTORIAL: 'skipTutorial', // { type }                       host skips the garage tutorial
+  // ── Round 3: Rook's roof defence (ROUND3_CONTRACT.md §Defend). All driver-local (host), so the sim stays authoritative.
+  DEFEND: 'defend',            // { type, on: bool, ai?: bool }    F / DEFEND button: Rook climbs onto the roof (on) or back down (off).
+                               //                                  ai: the sim's AI Rook aims and shoots (bots, solo stops)
+  ROOF_AIM: 'roofAim',         // { type, yaw, pitch, ads: bool }  RV-local aim (yaw 0 = RV forward), every frame while on the roof
+  ROOF_FIRE: 'roofFire',       // { type }                         one trigger pull with the selected gun (sim adds spread, ammo, heat)
+  ROOF_RELOAD: 'roofReload',   // { type }                         R
+  ROOF_SELECT: 'roofSelect',   // { type, slot }                   'revolver'|'shotgun'|'rifle'|'firecracker'|'balloon'|'flare'
+  ROOF_THROW: 'roofThrow',     // { type, device, x, z }           throw the selected throwable at a world ground point
 });
 
 // Snapshot.events[].type values (host → cook + host's own renderer/audio).
@@ -93,6 +107,16 @@ export const EV = Object.freeze({
   SETPIECE: 'setpiece',          // { type, id, kind, phase }     set-piece started/changed phase (HUD caption, audio)
   HEAT_DROP: 'heatDrop',         // { type, stars, reason }       e.g. car wash
   RV_EXPLODE: 'rvExplode',       // { type, x, y, z, yaw }         the RV hit 0 hp and blew up (just before EV.END); snapshot rv.wrecked stays true
+  // ── Round 3 ──
+  DEFEND: 'defend',              // { type, on: bool, ai: bool }   Rook started climbing up (on) / is back in the seat (off)
+  SHOT: 'shot',                  // { type, gun, x, y, z, tx, ty, tz, copId: id|null, part: 'tyre'|'radiator'|'glass'|'body'|null, pellets?: [[tx,ty,tz,copId|null,part|null], …] }
+                                 //   one trigger pull from the roof: muzzle (x,y,z) → first hit point (tx,ty,tz); shotgun lists every pellet
+  RELOAD: 'reload',              // { type, gun, seconds }         reload started
+  COP_HIT: 'copHit',             // { type, copId, gun, part, x, y, z, effect: 'hole'|'crack'|'tyre'|'radiator'|'stall' }
+  COP_DISABLED: 'copDisabled',   // { type, copId, how: 'tyre'|'radiator'|'stall', x, z }   a police car is out of the fight
+  COP_SHOT: 'copShot',           // { type, copId, x, y, z, tx, ty, tz, target: 'rv'|'rook', hit: bool, damage }   cops fire back
+  DOC_OUT: 'docOut',             // { type, stopId, out: bool }    Doc jumped out of the side door (true) / is back inside (false)
+  STOP_COPS: 'stopCops',         // { type, stopId, count, eta }   someone called it in: cops are on their way to the stop
 });
 
 // Entity kind codes used in Snapshot.ents tuples. Keep in sync with assets registry.
@@ -162,6 +186,23 @@ LabState (cook → host at 6 Hz):
   entity states (cop/cop_suv/interceptor/moto_cop/rhino_truck): 6 soaked (hose), 7 stalled (firecracker), 8 paint-blind
   flashbang: state 0 flying (y>0) · 1 on the ground (fuse) · 2 burst ; variant 0 flash · 1 foam
 
+── Round 3 snapshot fields (ROUND3_CONTRACT.md is the full spec) ──
+  difficulty: 'easy'|'hard'|'extreme'
+  rv:       { ..., roofRook: bool (Rook visible on the roof), stopped: s the RV has been (nearly) standing still }
+            roofDoc stays in the snapshot but is always false now (Doc never climbs up)
+  crew:     { driver, cook, cookDown, regen: { driver: bool, cook: bool } }      (rv.regen is the hull's)
+  bustInfo: { grace: s left before the meter may fill (0 = armed), armed: bool, defended: bool }
+  roof:     Rook's roof defence (sim/roof.js state()) — also in stop.roof:
+            { active, climbing, climbDir, climb: 0..1, onRoof, ai, available, why, nearCop: m,
+              gun: 'revolver'|'shotgun'|'rifle', slot, ads, aimYaw, aimPitch, reloading: s left, reloadT: total s,
+              mag: { revolver, shotgun, rifle }, reserve: { revolver, shotgun, rifle },
+              throwables: { firecracker, balloon, flare }, cooldown: s until the next shot, fx: [ … in-flight throws … ] }
+  stop:     { ..., doc: 'in'|'out'|'back', docShop: null | { label, frac: 0..1, tLeft: s } }
+  copFx:    [ [copId, holes, crack 0|1, tyreMask (bit0 fl, bit1 fr, bit2 rl, bit3 rr), steam 0|1], … ]  damaged police cars
+  entity states (cop kinds): 9 tyre out (slewing / stopped), 10 radiator hit (steaming, stalled)
+LabState gains: shop: null | { stopId, label, frac: 0..1, tLeft }   (Doc's shop-run progress, shown on the driver's HUD)
+
 EndResult:
-{ won: bool, reason: string, units, quality, payout, points, chaos, knocked, timeSec, stars: 0..3 (rating) }
+{ won: bool, reason: string, units, quality, payout, points, chaos, knocked, timeSec, stars: 0..3 (rating),
+  difficulty, scoreMult }
 */

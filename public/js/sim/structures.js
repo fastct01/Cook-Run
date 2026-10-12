@@ -29,6 +29,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { capsuleSegment, resolveStatic, updateCapsule } from './collisions.js';
 import { clamp } from './util.js';
+// R3-GARAGE: the start district around Rook's Garage (pure data + resolvers, no three.js)
+import { startColliders } from '../assets/expansion/r3-start-layout.js';
 
 const smooth01 = (t) => { t = clamp(t, 0, 1); return t * t * (3 - 2 * t); };
 const _c = { nx: 0, nz: 0, depth: 0, px: 0, pz: 0 };
@@ -112,6 +114,14 @@ export function railLinesOf(route) {
   return out.sort((a, b) => a.z - b.z);
 }
 
+// R3-GARAGE: the start district (tow yard, tyre shop, diner, mart, pumpjacks, poles, pipe bridge, refinery gate …,
+// assets/expansion/r3-start-layout.js) is authored around the route's garage at z 45 on the right (u +18).
+// startDistrictOn(route) says whether this route has it — the renderer (render/world/startDistrict.js) uses the same rule.
+export function startDistrictOn(route) {
+  const g = (route?.structures || []).find((s) => s.type === 'garage');
+  return !!g && Math.abs((g.z ?? 45) - 45) < 1 && (g.side ?? 1) === 1 && (g.offset ?? GARAGE_LOCAL.offset) === GARAGE_LOCAL.offset;
+}
+
 export function structureLayout(track, route) {
   const L = { garage: null, tolls: [], carWashes: [], cattleGrids: [], rails: [], zones: [], segs: [], railLines: railLinesOf(route) };
   const br = route.bridge;
@@ -140,6 +150,12 @@ export function structureLayout(track, route) {
     }
   }
   if (br) L.zones.push([br.rampStart - 40, br.landingEnd + 25, 'bridge']);
+  // R3-GARAGE: start-district colliders (only what the RV can reach: fences, parked cars, sign poles, utility poles,
+  // pipe-bridge towers, the closed refinery gate behind the start) — [{ ax, az, bx, bz, r, kind: 'start_<id>', damage }]
+  L.startDistrict = false;
+  if (L.garage && startDistrictOn(route)) {
+    try { L.segs.push(...startColliders(track)); L.startDistrict = true; } catch (e) { /* layout data missing: no district */ }
+  }
   return L;
 }
 

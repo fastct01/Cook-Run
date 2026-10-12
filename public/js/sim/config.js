@@ -40,6 +40,7 @@ export const SIM_DEFAULTS = {
     windowBehind: 70, windowAhead: 400, spawnAhead: [240, 330], oncomingShare: 0.45,
     maxCars: 16, laneChangeRate: 1.4, followGap: 7, lookAhead: 38, crashFriction: 7,
     spinFriction: 5, restitution: 0.25,
+    densityMult: 1,         // difficulty lever: × biome.trafficPer100m and maxCars (Easy 0.8, Extreme 1.2)
   },
   rival: {
     spawnAt: [4550, 5320], hp: 60, topSpeed: 33, spawnBehind: 110, ramCooldown: 4,
@@ -55,6 +56,7 @@ export const SIM_DEFAULTS = {
   },
   obstacles: {
     chunk: 50, windowBehind: 80, windowAhead: 320, excludeStart: 90, hitCooldown: 0.8, flyingSeconds: 1.4,
+    densityMult: 1,         // difficulty lever: × biome.obstaclePer100m (Easy 0.7, Extreme 1.3)
   },
   cops: {
     hp: 45, suvHp: 80, mass: 1.2, suvMass: 1.8, length: 4.8, width: 1.95, suvLength: 5.2, suvWidth: 2.1,

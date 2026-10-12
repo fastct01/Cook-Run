@@ -10,6 +10,7 @@
 // Facing rules (ART): roadside fronts face local +Z → faceRoad(z, s) = s·π/2 + heading.
 // ─────────────────────────────────────────────────────────────────────────────
 import { Rng, hashSeed } from '../../sim/rng.js';
+import { applyStartDistrict, startItemsFor } from './startDistrict.js';   // R3-GARAGE
 
 const HALF_PI = Math.PI / 2;
 const sstep = (a, b, v) => { const t = Math.min(1, Math.max(0, (v - a) / (b - a))); return t * t * (3 - 2 * t); };
@@ -20,6 +21,7 @@ export class Layout {
     this.track = info.track;
     this.cache = new Map();
     this.landmarks = planLandmarks(info);
+    applyStartDistrict(this);   // R3-GARAGE: start-district reservations (before any biome is generated)
   }
   itemsIn(z0, z1) {
     const out = [];
@@ -38,6 +40,7 @@ export class Layout {
     const fn = GEN[this.info.biomes[i].id] || GEN.generic;
     try { fn(g); } catch (e) { console.error('[world] layout', this.info.biomes[i].id, e); }
     for (const lm of this.landmarks) if (lm.biome === i) g.landmark(lm);
+    for (const it of startItemsFor(this, i)) g.items.push(it);   // R3-GARAGE: the start district (static, baked like any item)
     list = g.items.sort((a, b) => a.z - b.z);
     this.cache.set(i, list);
     return list;

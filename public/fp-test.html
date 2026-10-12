@@ -40,8 +40,18 @@
 //   ?stop=parked|shopping|returning|loading|blocked   fake stop state    ?roof=1  Doc on the roof
 //   ?regen=1  ?tod=<hour>  ?end=win|lose  ?fake=1 (no sim)  ?speed=<m/s cap>  ?shot=1 (hide debug bar)
 //   ?nofp=1          plain chase camera (for comparison)          ?wipers=1  force the wipers on
-// Keys: C look-around · M mute · H horn · P pause · F fog toggle · X end screen
-// window.__fp = { fp, view, hud, audio, sim, advance(sec), settled(), stats(), setFx(), head(), look(), event() }
+// Round 3 cab (agent CAB):
+//   ?cab=legacy      today's rv_cab_fp + CabInterior + CabArms (fps / draw-call comparison); default rv_cab_fp_r3
+//   ?v=0|1           hands: 0 blue gloves + yellow suit cuffs · 1 bare hands + red hoodie cuffs (default: auto from the garage)
+//   ?garage=suited|unsuited   fake a garage phase for 0.3 s first (auto hands variant)
+//   ?scene=brake|corner|bumps|horn|oil|drive   scripted fake drive (implies ?fake=1): brake = cruise 14 m/s, hard stop
+//                    at 1 s, bump at 3.2 s · corner = right then left at 3 s · bumps = a bump every 1.4 s · horn = held 1–2.6 s
+//                    · oil = the oil gadget at 0.8 s (lamp flashes) · drive = gentle weave
+//   ?difficulty=easy|hard|extreme (look-around cooldown 20 / 30 / 45 s)
+//   ?stars=N  ?hull=<0..100>  ?steer=<wheel degrees>  ?horn=1  ?signal=1 (pull in to a stop)  ?area=<name>  ?debugcab=1 (state line)
+// Keys: C look-around · M mute · H horn · P pause · F fog toggle · X end screen · G gloves/bare
+// window.__fp = { fp, view, hud, audio, sim, advance(sec), settled(), stats(), setFx(), head(), look(), event(),
+//                 cab() (rig state), cabCalls() (draw calls of the cab), variant(v), lookCam(name) }
 // ─────────────────────────────────────────────────────────────────────────────
 import { loadData } from './js/data/loadData.js';
 import { WorldView } from './js/render/WorldView.js';
@@ -53,7 +63,9 @@ import { EV, KIND_ID } from './js/shared/protocol.js';
 
 const q = new URLSearchParams(location.search);
 if (q.has('shot')) document.body.classList.add('shot');
-const data = await loadData();
+let data = await loadData();
+// ?difficulty=easy|hard|extreme → the scaled data (look-around cooldown 20 / 30 / 45 s, …), as main.js does
+if (q.get('difficulty')) { try { const D = await import('./js/shared/difficulty.js'); data = D.withDifficulty(data, q.get('difficulty')); } catch (e) { console.info('[fp-test] difficulty unavailable', e && e.message); } }
 const seed = q.has('seed') ? +q.get('seed') : data.route.defaultSeed;
 const startZ = q.has('z') ? +q.get('z') : 3600;
 const track = new Track(data.route, seed);
@@ -64,7 +76,7 @@ if (role === 'cook') document.body.classList.add('cook');
 const audio = createAudio({ route: data.route });
 const view = new WorldView(canvas, data, { seed, role, audio });
 const hud = new Hud(hudRoot, data, { role });
-const fp = new FirstPersonDriver(view, data, { hudRoot, audio });
+const fp = new FirstPersonDriver(view, data, { hudRoot, audio, cab: q.get('cab') === 'legacy' ? 'legacy' : 'r3', handsVariant: q.has('v') ? +q.get('v') : null });
 const useFp = !q.has('nofp') && role === 'driver';
 fp.ready.then(() => { if (q.has('fov')) fp.ud.fov = +q.get('fov'); if (q.has('pitch')) fp.ud.eyePitch = +q.get('pitch'); });
 fp.setActive(useFp);
@@ -74,8 +86,12 @@ if (q.has('wipers')) fp.forceWipers = true;
 // ── sim (real GameSim + Autopilot) with a scripted fallback ─────────────────
 let sim = null, ap = null, mode = 'sim', fake = null, lastInput = null, prevSnap = null, shopWait = 0;
 const speedCap = q.has('speed') ? +q.get('speed') : null;
+const scene = q.get('scene') || '';
+let hornHeld = q.has('horn');
+// runtime cab overrides (seeded from the URL; __fp.set({ steer, stars, hull, area, signal }))
+const ov = { steer: q.has('steer') ? +q.get('steer') : null, stars: q.has('stars') ? +q.get('stars') : null, hull: q.has('hull') ? +q.get('hull') : null, area: q.get('area'), signal: q.has('signal') };
 async function startSim() {
-  if (q.has('fake')) throw new Error('fake requested');
+  if (q.has('fake') || scene) throw new Error('fake requested');
   const [{ GameSim }, { Autopilot }, veh] = await Promise.all([import('./js/sim/GameSim.js'), import('./js/sim/autopilot.js'), import('./js/sim/vehicle.js')]);
   sim = new GameSim(data, { seed, solo: true });
   if (sim.ready && typeof sim.ready.then === 'function') await sim.ready;
@@ -93,7 +109,7 @@ async function startSim() {
 try { await startSim(); } catch (e) {
   if (!q.has('fake')) console.info('[fp-test] sim unavailable, scripted drive:', e && e.message);
   mode = 'fake';
-  fake = { z: startZ, speed: speedCap ?? 22, t: 0 };
+  fake = { z: startZ, speed: speedCap ?? (scene ? 14 : 22), t: 0, steer: 0, bump: 0, lat: 0 };
 }
 
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -105,13 +121,37 @@ function todAt(z) {
 }
 function areaAt(z) { const b = data.route.biomes.find((b) => z >= b.from && z < b.to) || data.route.biomes[data.route.biomes.length - 1]; return { id: b.id, name: b.name }; }
 
+// scripted fake drives (?scene=…): speed (m/s), steer (−1..1), bump spikes, horn, events — deterministic in fake.t
+const sceneEvents = [];
+function sceneStep(dt) {
+  const t = fake.t, F = fake;
+  let target = speedCap ?? 14, steer = 0;
+  if (scene === 'brake') { target = t < 1 ? 14 : t < 2.6 ? 0 : 4; if (t >= 3.2 && t - dt < 3.2) F.bump = Math.max(F.bump, 0.9); }
+  else if (scene === 'corner') { steer = t < 0.6 ? 0 : t < 3 ? Math.min(1, (t - 0.6) * 1.6) : t < 5.4 ? -Math.min(1, (t - 3) * 1.6) : 0; target = 12; }
+  else if (scene === 'bumps') { if (Math.floor(t / 1.4) !== Math.floor((t - dt) / 1.4)) F.bump = Math.max(F.bump, 0.75); target = 11; }
+  else if (scene === 'horn') { hornHeld = t > 1 && t < 2.6; target = 9; }
+  else if (scene === 'oil') { if (t >= 0.8 && t - dt < 0.8) sceneEvents.push({ type: EV.GADGET, gadget: 'oil' }); target = 13; }
+  else if (scene === 'drive') steer = Math.sin(t * 0.7) * 0.25;
+  else steer = Math.sin(t * 0.7) * 0.15;
+  if (ov.steer != null) steer = (ov.steer * Math.PI / 180) / 1.9;
+  // speed: hard braking −9 m/s², throttle +3 m/s²
+  F.speed = target < F.speed ? Math.max(target, F.speed - 9 * dt) : Math.min(target, F.speed + 3 * dt);
+  F.steer += (steer - F.steer) * Math.min(1, dt * 6);
+  F.lat += (-F.steer * F.speed * 0.55 - F.lat) * Math.min(1, dt * 5);          // right turn → acceleration toward the RV's right (−)
+  F.bump = Math.max(0, F.bump - dt * 2.2);
+}
 function fakeSnap(dt) {
-  fake.t += dt; fake.z += fake.speed * dt;
+  fake.t += dt;
+  sceneStep(dt);
+  fake.z += fake.speed * dt;
   const z = fake.z, n = track.lanesAt(z), u = track.laneU(z, Math.min(n - 1, Math.floor(n / 2)));
-  const steer = Math.sin(fake.t * 0.7) * 0.15;
-  return { t: fake.t, phase: 'drive', countdown: 0, rv: { x: track.xAt(z, u), y: track.surfaceY(z) ?? 0, z, yaw: track.headingAt(z), pitch: 0, roll: 0, speed: fake.speed, steer, hp: 82, airborne: false, nitro: 0, onRoad: true },
+  const steer = fake.steer;
+  const gq = q.get('garage'), inGarage = gq && fake.t < 0.3;
+  const ev = sceneEvents.splice(0);
+  return { t: fake.t, phase: inGarage ? 'garage' : 'drive', countdown: 0, rv: { x: track.xAt(z, u), y: track.surfaceY(z) ?? 0, z, yaw: track.headingAt(z), pitch: 0, roll: 0, speed: fake.speed, steer, hp: 82, airborne: false, nitro: 0, onRoad: true, horn: hornHeld },
+    garage: inGarage ? { step: 6, skipped: false, rook: { suited: gq === 'suited' }, items: { engine: 'on' } } : null,
     crew: { driver: 100, cook: 96 }, heat: { value: 1.4, stars: 1 }, bust: 0, score: { points: 1200, chaos: 3 }, inv: { units: 2, quality: 0.8, gadgets: { smoke: 1, oil: 1, nitro: 1 } },
-    feel: { latAcc: steer * 6, bump: 0.05 }, alert: {}, lab: {}, ents: [], events: [], dist: z, routeLength: data.route.routeLength, looted: [] };
+    feel: { latAcc: fake.lat, bump: Math.max(0.03, fake.bump) }, alert: {}, lab: {}, ents: [], events: ev, dist: z, routeLength: data.route.routeLength, looted: [] };
 }
 
 // ── scenario knobs ───────────────────────────────────────────────────────────
@@ -156,6 +196,12 @@ function augment(snap, dt) {
   }
   if (q.has('roof')) rv.roofDoc = true;
   if (q.has('regen')) rv.regen = true;
+  // cab scenario overrides
+  if (ov.stars != null) snap.heat = { ...(snap.heat || {}), stars: ov.stars, value: ov.stars + 0.4 };
+  if (ov.hull != null) rv.hp = ov.hull;
+  if (ov.area) snap.area = { id: ov.area.toLowerCase().replace(/\W+/g, '_'), name: ov.area };
+  if (hornHeld) rv.horn = true;
+  if (ov.signal) { const st = data.route.stops[0]; snap.nearStop = { id: st.id, name: st.name, dist: 90, side: st.side, z: rv.z + 90 }; snap.phase = 'drive'; }
   // a chasing cop glued 14 m behind (mirrors), canister ahead
   const ents = snap.ents = (snap.ents || []).slice();
   const fx_ = Math.sin(rv.yaw), fz_ = Math.cos(rv.yaw);
@@ -176,6 +222,7 @@ function step(dt) {
   if (mode === 'sim') {
     simAcc += dt;
     const inp = prevSnap ? ap.update(prevSnap) : null;
+    if (inp && hornHeld) inp.horn = true;
     lastInput = inp;
     let n = 0;
     while (simAcc >= FIXED && n < 30) { sim.step(inp, FIXED); simAcc -= FIXED; n++; }
@@ -183,6 +230,7 @@ function step(dt) {
     // (the Autopilot's autoShop stands in for ONFOOT's ShopChallenge: shopDone after ?shopwait s)
     return prevSnap;
   }
+  lastInput = { throttle: 0, steer: fake.steer, horn: hornHeld };
   return fakeSnap(dt);
 }
 
@@ -222,17 +270,18 @@ addEventListener('keydown', (e) => {
   if (e.repeat) return;
   if (e.code === 'KeyC') fp.lookAround();
   if (e.code === 'KeyM') audio.setMuted(!audio.muted);
-  if (e.code === 'KeyH') audio.horn(true);
+  if (e.code === 'KeyH') { audio.horn(true); hornHeld = true; }
+  if (e.code === 'KeyG') fp.setHandsVariant(fp.handsVariant ? 0 : 1);
   if (e.code === 'KeyP') paused = !paused;
   if (e.code === 'KeyF') fogOn = !fogOn;
   if (e.code === 'KeyX') hud.showEnd({ won: true, units: 7, quality: 0.8, payout: 31000, points: 18000, stars: 2, timeSec: 2300 }, {});
 });
-addEventListener('keyup', (e) => { if (e.code === 'KeyH') audio.horn(false); });
+addEventListener('keyup', (e) => { if (e.code === 'KeyH') { audio.horn(false); hornHeld = false; } });
 addEventListener('mousemove', (e) => fp.onPointer(e));
 
 // debug bar
 const dbg = document.getElementById('dbg');
-dbg.innerHTML = `<span id="dz"></span><span id="dg"></span><span id="dc"></span>
+dbg.innerHTML = `<span id="dz"></span><span id="dg"></span><span id="dc"></span><span id="dk"></span>
   <a data-k="look">C look</a><a data-k="fog">fog</a><a data-k="flash">flash</a><a data-k="shock">shock</a><a data-k="cap">caption</a>`;
 dbg.addEventListener('click', (e) => {
   const k = e.target.dataset.k;
@@ -249,6 +298,36 @@ function dbgUpdate() {
   document.getElementById('dz').textContent = `${mode} z ${Math.round(snap?.rv?.z || 0)} · ${Math.round((snap?.rv?.speed || 0) * 2.237)} mph`;
   document.getElementById('dg').textContent = `gear ${ds.gear} · ${Math.round(ds.rpm)} rpm · thr ${ds.throttle.toFixed(2)}`;
   document.getElementById('dc').textContent = `calls ${view.stats.calls} (+mirror ${fp.stats.mirrorCalls})`;
+  if (q.has('debugcab') && fp.rig) { const s = fp.rig.state; document.getElementById('dk').textContent = `${fp.cabKind} v${s.variant} ${s.gear} · L ${s.hands[0].mode} ${s.hands[0].rot} · R ${s.hands[1].mode} ${s.hands[1].rot} · lamps ${Object.entries(s.lamps).filter(([, v]) => v).map(([k]) => k).join(',') || '–'} · ${s.radio?.name || ''} ${s.radio?.freq || ''}`; }
+}
+
+/** Draw calls of the cab: one frame with the cab hidden vs shown (mirror passes excluded). */
+function cabCalls() {
+  const r = view.renderer, cab = fp.cab, mir = fp.mirrors;
+  if (!r || !cab) return null;
+  fp.mirrors = null;
+  const measure = (vis) => { cab.visible = vis; view.render(0, { draw: true }); return { calls: r.info.render.calls, tris: r.info.render.triangles }; };
+  let a, b;
+  try { a = measure(false); b = measure(true); } finally { fp.mirrors = mir; }
+  return { without: a, with: b, cabCalls: b.calls - a.calls, cabTris: b.tris - a.tris, meshes: fp.rig ? fp.rig.stats : null };
+}
+/** Debug cameras (RV-local position / target) for close-ups of the cab. */
+const LOOK_CAMS = {
+  trinkets: { pos: [0.42, 1.86, 2.62], at: [0.0, 1.62, 3.12], fov: 46 },
+  dash: { pos: [0.5, 1.72, 2.64], at: [0.5, 1.56, 3.0], fov: 40 },
+  radio: { pos: [0.14, 1.42, 2.62], at: [-0.06, 1.2, 2.92], fov: 30 },
+  hands: { pos: [0.52, 1.95, 2.52], at: [0.55, 1.5, 2.95], fov: 60 },
+  column: { pos: [0.3, 1.62, 2.66], at: [0.6, 1.45, 2.92], fov: 46 },
+};
+let lookCam = null;
+const _lc = { p: null, t: null };
+function applyLookCam(camera) {
+  if (!lookCam || !fp.frame) return;
+  const L = LOOK_CAMS[lookCam]; if (!L) return;
+  const T = fp.frame.matrixWorld;
+  _lc.p = (_lc.p || new camera.position.constructor()).set(...L.pos).applyMatrix4(T);
+  _lc.t = (_lc.t || new camera.position.constructor()).set(...L.at).applyMatrix4(T);
+  camera.position.copy(_lc.p); camera.up.set(0, 1, 0); camera.lookAt(_lc.t); camera.fov = L.fov; camera.updateProjectionMatrix();
 }
 
 window.__fp = {
@@ -259,6 +338,12 @@ window.__fp = {
   stats: () => ({ ...view.stats, simMode: mode, phase: snap?.phase, stop: snap?.stop?.state ?? null, z: Math.round(snap?.rv?.z || 0), mirrorCalls: fp.stats.mirrorCalls, mirrorRenders: fp.stats.mirrorRenders, mirrorAvg: fp.mirrors ? fp.mirrors.callsPerPass : 0, mode: fp.mode, drive: fp.driveState }),
   setFx(o) { forced.fx = o; }, head: (y, p) => fp.setHead(y, p), look: () => fp.lookAround(), event(ev) { pendingEvents.push(ev); },
   setManual(v) { manual = !!v; },
+  cab: () => (fp.rig ? fp.rig.state : null), cabCalls, variant: (v) => fp.setHandsVariant(v),
+  lookCam(name) {
+    lookCam = name || null;
+    if (!fp.ctrl.__wrapped) { const u = fp.ctrl.update; fp.ctrl.update = (dt, camera, s) => { u(dt, camera, s); applyLookCam(camera); }; fp.ctrl.__wrapped = true; }
+  },
+  setHorn(on) { hornHeld = !!on; }, set(o) { Object.assign(ov, o); return { ...ov }; },
   ready: fp.ready,
 };
 </script>

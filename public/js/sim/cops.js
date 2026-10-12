@@ -31,8 +31,37 @@
 //  • Plugin hooks: applyEffect(id, {push, soak, stall, blind, damage}) → states
 //    6 soaked (slow, can't see) / 7 stalled (engine dead, coasts) / 8 paint-blind
 //    (swerves); setRedirect(fn, s) → chasing cops drive to fn(cop) instead.
+//  • Round 3 (Rook's guns, roof.js): applyEffect also takes
+//      hole: n          bullet holes in the body        (persistent → snapshot copFx)
+//      crack: true      cracked windscreen              (persistent)
+//      tyre: 'fl'|'fr'|'rl'|'rr'  tyre burst → state 9: slews to a stop (yaw pull to that side),
+//                       out for rules.defend.guns.shotgun.tyreSeconds (20 s), then gives up (state 5)
+//      radiator: true   radiator hit → state 10: steaming, stalled guns.rifle.radiatorSeconds (15 s), then
+//                       back to the chase (the radiator keeps steaming: copFx steam stays 1)
+//      stall: s         engine dead → state 7 (as before)
+//      seconds: s       optional override of the tyre-out / radiator time
+//    A hit that doesn't disable (hole / crack on a running car): the officers duck and back off —
+//    for rules.defend.duckSeconds (1.5 s) the car reverses / pulls away to ≥ 14 m from the RV and
+//    neither rams nor fires (it is still state 1, so it still counts for the bust while close).
+//    Priority when several land at once: tyre (9) > radiator (10) > stall (7) > paint (8) > soak (6).
+//    A tyre-out car stays out (nothing else changes its state); a steaming one only gets longer.
+//    copFx(ids?) → [[id, holes, crack 0|1, tyreMask (bit0 fl, bit1 fr, bit2 rl, bit3 rr), steam 0|1]].
+//  • Cops fire back (rules.defend.copFire, every value defaulted; seeded RNG stream 909):
+//      return fire: while Rook is up on the roof (rv.roofRook), every running car (state 1) within
+//        `range` that is stopped or slow (< 5 m/s) shoots every returnEvery s (±25 %): a hit
+//        (chance accuracy) → hull −returnDamage (damageRv 'gunfire', no crew share) and Rook
+//        −returnDamage·rookShare (hurtDriver).
+//      chase fire: from chaseStars up, a chasing car within chaseRange shoots at the moving RV every
+//        chaseEvery s: hull only (−chaseDamage).
+//      EV.COP_SHOT { copId, x,y,z (the cop's side window), tx,ty,tz, target: 'rook'|'rv', hit, damage }.
+//      Disabled cars (2,3,6–10), parked, redirected, motos, the Rhino and the heli never fire.
+//  • Cops sent to a stop (rules.stops.response): dispatchToStop(stopId) — heat to ≥ response.heat
+//    (1.2) if below response.minStars, then response.cops cars spawn through the normal spawner
+//    from response.delay s on (spread 1–2 s, seeded stream 910), not capped by maxCops; regular
+//    spawns wait until the response is in. EV.STOP_COPS { stopId, count, eta } + a toast.
 // state: 0 parked (roadblock/patrol), 1 chase, 2 blinded (smoke), 3 spun out (oil),
-//        4 wrecked, 5 gave up, 6 soaked, 7 stalled, 8 paint-blind.  heli: 1 chasing, 0 leaving.
+//        4 wrecked, 5 gave up, 6 soaked, 7 stalled, 8 paint-blind, 9 tyre out, 10 radiator (steaming).
+//        heli: 1 chasing, 0 leaving.
 // Unity port: PoliceManager + CopCar / CopMoto / RhinoTruck / CopHeli + Canister.
 // ─────────────────────────────────────────────────────────────────────────────
 import { KIND_ID } from '../shared/protocol.js';
@@ -41,7 +70,18 @@ import { Rng, hashSeed } from './rng.js';
 import { initBodyShape } from './collisions.js';
 import { aiDrive, coastBody, aiVertical, constrainAi } from './vehicle.js';
 
-const DISABLED = new Set([6, 7, 8]);
+const DISABLED = new Set([6, 7, 8, 9, 10]);
+const TYRE_BIT = Object.freeze({ fl: 1, fr: 2, rl: 4, rr: 8 });
+const FIRE_KINDS = new Set(['cop', 'cop_suv', 'interceptor']);
+// rules.defend.copFire Hard values (DEFEND writes the block; every value is defaulted here)
+export const COP_FIRE_DEFAULTS = Object.freeze({
+  range: 35, returnEvery: 2.4, returnDamage: 2, rookShare: 0.5, accuracy: 0.45,
+  chaseStars: 4, chaseEvery: 6, chaseDamage: 1.5, chaseRange: 30,
+});
+// rules.stops.response Hard values
+export const STOP_RESPONSE_DEFAULTS = Object.freeze({ cops: 2, delay: 8, minStars: 1, heat: 1.2, spread: [1, 2] });
+// Rook on the roof, RV-local (chest height) — where return fire is aimed
+const ROOK_LOCAL = Object.freeze({ x: 0, y: 4.3, z: -1.8 });
 const NO_SPAWN_ZONES = new Set(['toll_plaza', 'car_wash', 'river_bridge', 'drawbridge', 'garage', 'bridge', 'rail_crossing']);
 
 export class CopSystem {
@@ -49,6 +89,11 @@ export class CopSystem {
     this.sim = sim;
     this.rng = sim.rngCops;
     this.rngRhino = new Rng(hashSeed(sim.seed, 808));
+    this.rngFire = new Rng(hashSeed(sim.seed, 909));     // cop return/chase fire (own stream: nothing else shifts)
+    this.rngResp = new Rng(hashSeed(sim.seed, 910));     // stop response timing
+    this.response = [];     // pending stop-response spawns: { stopId, at, tries }
+    this.callHold = null;   // { stopId, until }: the police know where the RV is (heat doesn't cool) while the response drives up
+    this.fireStats = { shots: 0, hits: 0, returnShots: 0, chaseShots: 0, rvDamage: 0, rookDamage: 0 };
     this.cops = [];
     this.canisters = [];
     this.spawnT = 0;
@@ -347,6 +392,7 @@ export class CopSystem {
     if (this.redirect) { this.redirect.t -= dt; if (this.redirect.t <= 0 || sim.phase !== 'drive') this.redirect = null; }
     if (!this.noMoreSpawns && sim.phase !== 'garage') this._spawnPatrols();
     const knows = heat.unseenT < H.decayDelay || heat.seen;
+    if (this.response.length) this._updateResponse(level);
     if (sim.phase === 'drive' && !heat.gaveUp && !this.noMoreSpawns) {
       this.spawnT -= dt;
       if (this.spawnT <= 0) {
@@ -373,6 +419,8 @@ export class CopSystem {
       if (c.kind === 'heli') { if (!level.heli && c.state === 1) c.state = 0; continue; }
       if (c.kind === 'rhino_truck') { if (!level.rhino && c.state === 1 && !c.parked) c.state = 5; continue; }
       if (c.state === 1 && !c.parked && !c.plunge) {
+        // cops sent to a supply stop stay while that stop runs (they're on top of the level's cap)
+        if (c.response != null && level.maxCops > 0 && sim.stops?.active?.st?.def?.id === c.response) continue;
         active++;
         if (level.maxCops === 0 || active > level.maxCops + 1) c.state = 5;
       }
@@ -388,6 +436,7 @@ export class CopSystem {
         case 1:
           if (c.plunge) this._plunge(c, dt);
           else if (c.kind === 'rhino_truck') this._rhino(c, level, dt);
+          else if (c.duckT > 0) this._duck(c, dt);
           else this._chase(c, level, dt);
           break;
         case 2: this._blinded(c, dt, 0.4); break;
@@ -397,6 +446,8 @@ export class CopSystem {
         case 6: this._soaked(c, dt); break;
         case 7: this._stalled(c, dt); break;
         case 8: this._blinded(c, dt, 0.55); break;
+        case 9: this._tyreOut(c, dt); break;
+        case 10: this._steaming(c, dt); break;
       }
       const wall = constrainAi(sim, c);
       if (wall > 7 && c.state !== 4) this.damage(c, (wall - 7) * C.damageMult * (C.aiCrashDamageScale ?? 0.25) * (c.kind === 'moto_cop' ? 3 : 1));
@@ -409,6 +460,7 @@ export class CopSystem {
       }
     }
     this._updateCanisters(dt);
+    this._fire(dt);
     // despawn
     const lose = C.loseRange;
     this.cops = this.cops.filter((c) => {
@@ -737,6 +789,33 @@ export class CopSystem {
     if (c.timer <= 0) this._recover(c);
   }
 
+  // shot at (a hole / crack that didn't disable it): the officers duck — back off from the RV for a moment
+  _duck(c, dt) {
+    const sim = this.sim, rv = sim.rv;
+    c.duckT -= dt; c.ramT = 0;
+    const dx = c.x - rv.x, dz = c.z - rv.z, d = Math.hypot(dx, dz) || 1;
+    if (d < (sim.cfg.cops.soakBackOff ?? 14)) {
+      const ax = dx / d, az = dz / d;
+      const fwd = Math.sin(c.yaw) * ax + Math.cos(c.yaw) * az;
+      const tx = c.x + ax * 10, tz = c.z + az * 10;
+      aiDrive(c, tx, tz, fwd >= 0 ? 5 : -4, this._Pof(c), dt);
+    } else coastBody(c, 9, 3, dt);
+  }
+
+  // tyre burst (state 9): slews to a stop pulling toward the flat side, then gives up for good
+  _tyreOut(c, dt) {
+    c.timer -= dt;
+    coastBody(c, c.kind === 'moto_cop' ? 9 : 7, 1.1, dt);
+    if (c.timer <= 0) { c.timer = 0; c.state = 5; c.parked = false; }
+  }
+
+  // radiator hit (state 10): engine stalled, steaming; back to the chase when it wears off
+  _steaming(c, dt) {
+    c.timer -= dt;
+    coastBody(c, c.parked ? 12 : 6, 2, dt);
+    if (c.timer <= 0) this._recover(c);
+  }
+
   _recover(c) {
     c.timer = 0;
     c.state = c.prevState === 0 && c.parked ? 0 : 1;
@@ -806,34 +885,212 @@ export class CopSystem {
   }
 
   blind(c, seconds) {
-    if (c.kind === 'heli' || c.state === 4 || c.state === 5 || c.smokeCd > 0) return;
+    if (c.kind === 'heli' || c.state === 4 || c.state === 5 || c.state === 9 || c.state === 10 || c.smokeCd > 0) return;
     if (!DISABLED.has(c.state) && c.state !== 2) c.prevState = c.state === 0 && c.parked ? 0 : 1;
     c.state = 2; c.timer = seconds; c.ramT = 0; c.smokeCd = seconds + 1;
     if (c.prevState !== 0) c.parked = false;
   }
   spinOut(c, seconds) {
-    if (c.kind === 'heli' || c.state === 4 || c.oilCd > 0) return;
+    if (c.kind === 'heli' || c.state === 4 || c.state === 9 || c.state === 10 || c.oilCd > 0) return;
     c.state = 3; c.timer = seconds; c.ramT = 0; c.parked = false; c.oilCd = seconds + 1.5;
     c.w += this.rng.sign() * (c.kind === 'rhino_truck' ? 1.2 : 3.5 + this.rng.float(0, 2));
   }
 
-  // sim.applyCopEffect(id, { push:{x,z}, soak, stall, blind, damage })
+  // sim.applyCopEffect(id, { push:{x,z}, soak, stall, blind, damage, hole, crack, tyre, radiator })
   applyEffect(id, eff) {
     const c = this.cops.find((x) => x.id === id && !x.dead);
     if (!c) return false;
     if (eff.push) { c.vx += +eff.push.x || 0; c.vz += +eff.push.z || 0; }
     if (eff.damage > 0) this.damage(c, +eff.damage);
+    // persistent damage (recorded on any police vehicle, also wrecked / given-up ones) → copFx
+    if (c.kind !== 'heli') {
+      if (+eff.hole > 0) c.fxHoles = Math.min(99, (c.fxHoles | 0) + Math.max(1, Math.round(+eff.hole)));
+      if (eff.crack) c.fxCrack = 1;
+      if (eff.radiator) c.fxSteam = 1;
+    }
+    const tyreBit = c.kind !== 'heli' ? (TYRE_BIT[eff.tyre] || 0) : 0;
+    if (tyreBit) c.fxTyre = (c.fxTyre | 0) | tyreBit;
     if (c.kind === 'heli' || c.state === 4 || c.state === 5) return true;
+    const D = this.sim.rules.defend || {};
+    // a non-disabling hit on a running car: the officers duck and back off
+    if ((+eff.hole > 0 || eff.crack) && !tyreBit && !eff.radiator && !(eff.stall > 0) && c.kind !== 'rhino_truck' && (c.state === 1 || (c.state === 0 && !c.parked))) {
+      c.duckT = Math.max(c.duckT || 0, D.duckSeconds ?? 1.5); c.ramT = 0;
+    }
+    const keepPrev = () => { if (!DISABLED.has(c.state) && c.state !== 2 && c.state !== 3) c.prevState = c.state === 0 && c.parked ? 0 : 1; };
+    if (tyreBit) {
+      if (c.state !== 9) {
+        keepPrev();
+        c.state = 9; c.timer = +eff.seconds > 0 ? +eff.seconds : (D.guns?.shotgun?.tyreSeconds ?? D.tyreOutSeconds ?? 20);
+        c.ramT = 0; c.parked = false; c.plunge = false;
+        // the flat side pulls: left tyres (fl/rl) → yaw up (left), right tyres → yaw down
+        const left = tyreBit === 1 || tyreBit === 4;
+        c.w += (left ? 1 : -1) * clamp(Math.abs(c.speed) / 16, 0.25, 1.1);
+      }
+      return true;
+    }
+    if (c.state === 9) return true;   // out of the fight already
+    if (eff.radiator) {
+      const secs = +eff.seconds > 0 ? +eff.seconds : (D.guns?.rifle?.radiatorSeconds ?? D.radiatorSeconds ?? 15);
+      if (c.state !== 10) { keepPrev(); c.state = 10; c.timer = secs; }
+      else c.timer = Math.max(c.timer, secs);
+      c.ramT = 0;
+      return true;
+    }
+    if (c.state === 10) {
+      // already stalled and steaming: a stall can only make it longer
+      if (eff.stall > 0) c.timer = Math.max(c.timer, +eff.stall);
+      return true;
+    }
     let state = 0, secs = 0;
     if (eff.stall > 0) { state = 7; secs = +eff.stall; }
     else if (eff.blind > 0) { state = 8; secs = +eff.blind; }
     else if (eff.soak > 0) { state = 6; secs = +eff.soak; }
     if (state) {
-      if (!DISABLED.has(c.state) && c.state !== 2 && c.state !== 3) c.prevState = c.state === 0 && c.parked ? 0 : 1;
+      keepPrev();
       c.timer = c.state === state ? Math.max(c.timer, secs) : secs;
       c.state = state; c.ramT = 0;
     }
     return true;
+  }
+
+  // persistent police-car damage for the snapshot: [[id, holes, crack, tyreMask, steam], …]
+  // ids: optional Set of entity ids to include (netSnapshot sends only what is in its ents)
+  copFx(ids = null) {
+    const out = [];
+    for (const c of this.cops) {
+      if (c.dead || !(c.fxHoles || c.fxCrack || c.fxTyre || c.fxSteam)) continue;
+      if (ids && !ids.has(c.id)) continue;
+      out.push([c.id, c.fxHoles | 0, c.fxCrack ? 1 : 0, c.fxTyre | 0, c.fxSteam ? 1 : 0]);
+    }
+    return out;
+  }
+
+  // ── cops fire back (Round 3) ──────────────────────────────────────────────
+  copFire() {
+    const F = this.sim.rules.defend?.copFire || {};
+    const o = {};
+    for (const k of Object.keys(COP_FIRE_DEFAULTS)) o[k] = Number.isFinite(+F[k]) && F[k] !== null && F[k] !== '' ? +F[k] : COP_FIRE_DEFAULTS[k];
+    return o;
+  }
+
+  _fire(dt) {
+    const sim = this.sim, rv = sim.rv;
+    if (sim.phase !== 'drive' || sim.heat.gaveUp) { for (const c of this.cops) c.fireT = null; return; }
+    const F = this.copFire(), rng = this.rngFire;
+    const rookUp = !!rv.roofRook;
+    const chaseOn = !rookUp && sim.heat.stars >= F.chaseStars && Math.abs(rv.speed) >= (sim.rules.heat.bust?.maxRvSpeed ?? 4) && !rv.airborne;
+    if (!rookUp && !chaseOn) { for (const c of this.cops) c.fireT = null; return; }
+    const R2 = F.range * F.range, C2 = F.chaseRange * F.chaseRange;
+    for (const c of this.cops) {
+      if (!FIRE_KINDS.has(c.kind) || c.state !== 1 || c.redirected || c.parked || c.plunge || c.airborne || c.duckT > 0) { c.fireT = null; continue; }
+      const dx = rv.x - c.x, dz = rv.z - c.z, d2 = dx * dx + dz * dz;
+      let mode = null;
+      if (rookUp && d2 <= R2 && Math.abs(c.speed) < 5) mode = 'return';
+      else if (chaseOn && d2 <= C2) mode = 'chase';
+      if (!mode) { c.fireT = null; c.fireMode = null; continue; }
+      const every = Math.max(0.2, mode === 'return' ? F.returnEvery : F.chaseEvery);
+      // first shot after coming into range: a seeded wait of 40–100 % of the interval
+      if (c.fireT == null || c.fireMode !== mode) { c.fireT = every * rng.float(0.4, 1.0); c.fireMode = mode; }
+      c.fireT -= dt;
+      if (c.fireT > 0) continue;
+      c.fireT = every * rng.float(0.75, 1.25);
+      this._shoot(c, mode, F, rng, Math.sqrt(d2));
+    }
+  }
+
+  _shoot(c, mode, F, rng, dist) {
+    const sim = this.sim, rv = sim.rv;
+    const hit = rng.chance(clamp(F.accuracy, 0, 1));
+    const dmg = mode === 'return' ? F.returnDamage : F.chaseDamage;
+    // muzzle: the cop's side window facing the RV
+    const ux = (rv.x - c.x) / (dist || 1), uz = (rv.z - c.z) / (dist || 1);
+    const mx = c.x + ux * 0.9, my = (c.y || 0) + 1.3, mz = c.z + uz * 0.9;
+    // target: Rook on the roof (return fire) or the RV's flank (chase fire)
+    let tx, ty, tz;
+    const s = Math.sin(rv.yaw), co = Math.cos(rv.yaw);
+    if (mode === 'return') {
+      tx = rv.x + ROOK_LOCAL.x * co + ROOK_LOCAL.z * s; tz = rv.z - ROOK_LOCAL.x * s + ROOK_LOCAL.z * co; ty = (rv.y || 0) + ROOK_LOCAL.y;
+    } else {
+      const along = rng.float(-3, 3);
+      tx = rv.x + s * along - ux * 1.2; tz = rv.z + co * along - uz * 1.2; ty = (rv.y || 0) + rng.float(0.9, 2.4);
+    }
+    if (!hit) {
+      // a miss sails past: over the top / beside the target, further out
+      const px = -uz, pz = ux, off = rng.sign() * rng.float(1.2, 3.0);
+      tx += ux * 6 + px * off; tz += uz * 6 + pz * off; ty += rng.float(0.6, 2.2);
+    }
+    const st = this.fireStats;
+    st.shots++; if (mode === 'return') st.returnShots++; else st.chaseShots++;
+    let done = 0;
+    if (hit) {
+      st.hits++;
+      const hp0 = rv.hp;
+      sim.damageRv(dmg, 'gunfire', true);
+      done = Math.max(0, hp0 - rv.hp);
+      st.rvDamage += done;
+      if (mode === 'return' && sim.phase === 'drive') {
+        const d0 = sim.crew.driver;
+        sim.hurtDriver(dmg * clamp(F.rookShare, 0, 2));
+        st.rookDamage += Math.max(0, d0 - sim.crew.driver);
+      }
+    }
+    sim.emit({ type: 'copShot', copId: c.id, x: mx, y: my, z: mz, tx, ty, tz, target: mode === 'return' ? 'rook' : 'rv', hit, damage: hit ? dmg : 0 });
+  }
+
+  // ── cops sent to a supply stop (Round 3) ──────────────────────────────────
+  responseRules() {
+    const R = this.sim.rules.stops?.response || {};
+    const D = STOP_RESPONSE_DEFAULTS;
+    const num = (v, d) => (Number.isFinite(+v) && v !== null && v !== '' ? +v : d);
+    const sp = Array.isArray(R.spread) && R.spread.length === 2 ? [num(R.spread[0], 1), num(R.spread[1], 2)] : D.spread;
+    return { cops: Math.max(0, Math.round(num(R.cops, D.cops))), delay: Math.max(0, num(R.delay, D.delay)), minStars: num(R.minStars, D.minStars), heat: num(R.heat, D.heat), spread: sp };
+  }
+
+  // the RV parked at a supply stop: someone calls it in
+  dispatchToStop(stopId) {
+    const sim = this.sim, heat = sim.heat, R = this.responseRules();
+    if (sim.phase !== 'drive' || heat.gaveUp || this.noMoreSpawns || R.cops <= 0) return null;
+    if (heat.value < R.minStars) heat.set(Math.max(heat.value, R.heat));
+    this.response = this.response.filter((p) => p.stopId !== stopId);
+    let at = sim.t + R.delay;
+    for (let i = 0; i < R.cops; i++) {
+      if (i > 0) at += this.rngResp.float(R.spread[0], R.spread[1]);
+      this.response.push({ stopId, at, tries: 0 });
+    }
+    // regular spawns wait until the response is in; the heat holds until it has had time to arrive
+    this.spawnT = Math.max(this.spawnT, at - sim.t + 1);
+    this.callHold = { stopId, until: at + 12 };
+    const eta = Math.round((R.delay + 4) * 10) / 10;   // spawn delay + ~4 s to drive up from 90–130 m
+    sim.emit({ type: 'stopCops', stopId, count: R.cops, eta });
+    sim.emit({ type: 'msg', text: 'Someone called it in — cops on the way!', tone: 'bad' });
+    return { count: R.cops, eta };
+  }
+
+  cancelResponse(stopId) {
+    this.response = this.response.filter((p) => p.stopId !== stopId);
+    if (this.callHold && this.callHold.stopId === stopId) this.callHold = null;
+  }
+  // true while a stop response is on its way to the RV parked at that stop (heat.js holds the decay)
+  calledIn() {
+    const h = this.callHold, sim = this.sim;
+    if (!h) return false;
+    if (sim.t >= h.until || sim.stops?.active?.st?.def?.id !== h.stopId) { this.callHold = null; return false; }
+    return true;
+  }
+
+  _updateResponse(level) {
+    const sim = this.sim;
+    if (sim.phase !== 'drive' || sim.heat.gaveUp || this.noMoreSpawns) { this.response = []; return; }
+    for (let i = 0; i < this.response.length; i++) {
+      const p = this.response[i];
+      if (sim.t < p.at) continue;
+      const kind = level.suv && this.rngResp.chance(0.4) ? 'cop_suv' : 'cop';
+      const c = this._spawnCar(level, kind);
+      if (c) { c.response = p.stopId; c.state = 1; this.response.splice(i, 1); i--; continue; }
+      // no room right now (traffic / a structure zone): try again shortly
+      p.tries++; p.at = sim.t + 0.5;
+      if (p.tries > 12) { this.response.splice(i, 1); i--; }
+    }
   }
 
   pushEnts(out) {

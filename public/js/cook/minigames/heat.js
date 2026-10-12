@@ -18,6 +18,14 @@ export class HeatGame extends Minigame {
     this.bandMax = params.bandMax ?? 220;
     this.duration = params.duration ?? 8;
     this.fireAt = params.fireAt ?? 260;
+    if (this.zoneScale !== 1) {
+      // difficulty: the band widens / narrows around its centre (never reaching the fire mark)
+      const c = (this.bandMin + this.bandMax) / 2, half = (this.bandMax - this.bandMin) / 2 * this.zoneScale;
+      this.bandMin = Math.round(Math.max(HEAT_T_MIN + 20, c - half));
+      this.bandMax = Math.round(Math.min(this.fireAt - 8, c + half));
+    }
+    // difficulty: how readily an unwatched burner runs away (Hard 1 = drift only)
+    this.burnerFireMult = Math.max(0, +(this.levers.burnerFireMult ?? 1) || 0);
     this.temp = params.startTemp ?? 70;
     this.tMax = Math.ceil((this.fireAt + 40) / 10) * 10;
     this.dial = 0;               // 0..1 burner setting
@@ -82,7 +90,13 @@ export class HeatGame extends Minigame {
     // inertia: first-order lag towards the equilibrium of the dial
     const eq = this._eq(this.dial);
     const k = eq > this.temp ? 0.42 : 0.3;
-    this.temp += ((eq - this.temp) * k + this.drift) * dt;
+    // unwatched (Doc away from the stove): the drift is × burnerFireMult and the flame creeps
+    // (burnerFireMult − 1) × 30 °C/s — that shifts the pot's resting temperature by ≈ creep / 0.3:
+    // Extreme +15 °C/s (≈ +50 °C: with the drift a burner left at the band reaches the fire mark), Easy −12 °C/s
+    // (it cools out of the band instead), Hard 0 (today's drift only)
+    const bfm = this.unwatched ? this.burnerFireMult : 1;
+    const creep = this.unwatched ? (this.burnerFireMult - 1) * 30 : 0;
+    this.temp += ((eq - this.temp) * k + this.drift * bfm + creep) * dt;
     if (feel.bumpHit > this.bumpThreshold() * 0.7) {
       const jolt = (this.rand() < 0.65 ? 1 : -1) * (8 + feel.bumpHit * 18);
       this.temp += jolt;
@@ -98,8 +112,9 @@ export class HeatGame extends Minigame {
       else this.inBand += dt * 0.0; // out of band: no progress
     }
     if (this.temp >= this.fireAt && this._fireCd <= 0) {
-      this._fireCd = 0.6;
-      this.ctx.startFire?.(0.12);
+      const m = Math.max(0.2, this.burnerFireMult);
+      this._fireCd = 0.6 / m;
+      this.ctx.startFire?.(0.12 * m);
     }
     this._progress = clamp(this.inBand / this.duration, 0, 1);
     this._score = this.total > 0 ? clamp(this.inBand / Math.max(this.duration, this.total), 0, 1) : 1;

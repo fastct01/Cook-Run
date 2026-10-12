@@ -15,6 +15,7 @@ import * as THREE from 'three';
 import { STORE_FP, SEA_Y } from '../roadBuilder.js';
 import { textBoardMaterial } from '../textures.js';
 import { structureLayout } from '../../sim/structures.js';
+import { startLiveItems } from './startDistrict.js';   // R3-GARAGE
 
 const HALF_PI = Math.PI / 2;
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
@@ -243,6 +244,8 @@ export class StructuresView {
       } });
     }
     this.live = new Map();
+    // R3-GARAGE: live start-district objects (the two nodding pumpjacks) + the garage's way-out arrows
+    try { for (const it of startLiveItems(info, lib)) this.items.push(it); } catch (e) { console.warn('[world] start district', e); }
     this._initArrow();
   }
 
@@ -347,6 +350,8 @@ export class StructuresView {
     this.lotRing.material.opacity = 0.35 + 0.35 * pulse;
   }
 
+  /** R3-GARAGE: the way-out arrows (render/world/startDistrict.js ExitArrows) or null when out of range */
+  get exitArrows() { const L = this.live.get('r3_exit_arrows'); return L ? L.arrows : null; }
   /** the garage exterior (for the on-foot tutorial): { root, door } or null when out of range */
   get garage() { const L = this.live.get('garage'); return L ? { root: L.root, door: L.door } : null; }
 

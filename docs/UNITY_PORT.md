@@ -1978,3 +1978,41 @@ one; `sim/setpieces/test/run.js` has a scenario per plugin you can mirror as Edi
 5. The shop scenes, one at a time; until a shop exists, call `ShopDone(stopId, 0.6)` after a timer.
 6. The first-person cab and look-around camera; keep the chase camera as a debug option.
 
+
+
+## 9. Round 3
+
+`ROUND3_CONTRACT.md` is the full spec. What changes for a Unity port:
+
+- **Difficulty** is a pure transform of the data, `withDifficulty(data, level)` (`shared/difficulty.js`). In Unity, keep
+  one `RulesConfig` asset and apply the level's op list (`set`/`mul`/`add`/`min` on dotted paths) to a runtime copy at
+  session start. Never mutate the asset. The level travels in the lobby's `START` message (`difficulty`).
+- **Doc's shop run is client-side.** It runs on the cook's machine like the garage avatars do, and reports with
+  `CMD.shopEnter`, `shopDone {stopId, score}` and `shopAbort`. The host keeps the 90 s limit. Doc's progress rides in
+  `LabState.shop` and is echoed in `snapshot.stop.docShop`. In Unity, the shop scenes are additive scenes loaded on
+  the cook's client, with Doc's camera + `FpHands` prefab.
+- **Rook's roof defence** (`sim/roof.js`) is host logic, driven by driver-local commands: `defend {on, ai}`,
+  `roofAim`, `roofFire`, `roofReload`, `roofSelect`, `roofThrow`. The hit test is `rayCopHit` against per-kind
+  oriented boxes (4 wheels, radiator, glass band, body). In Unity, the same boxes become child BoxColliders on a
+  `CopDamageZones` layer, with a `Physics.Raycast` per pellet. Effects go through `ApplyCopEffect(id, {hole, crack,
+  tyre, radiator, stall})`. Cop states 9 (tyre out) and 10 (radiator) join the enum. `snapshot.copFx` drives the
+  damage decals.
+- **Cops fire back** (`rules.defend.copFire`): a seeded timer per cop. Hits are rolled on the host. `EV.COP_SHOT` is
+  for effects only.
+- **Regen** keeps one last-damage timestamp per bar (hull, Rook, Doc).
+- **New messages:**
+  - `C2S.SETTINGS {difficulty}`;
+  - `CMD.shopEnter/shopDone/shopAbort`;
+  - `DCMD.defend/roofAim/roofFire/roofReload/roofSelect/roofThrow`;
+  - events `defend`, `shot`, `reload`, `copHit`, `copDisabled`, `copShot`, `docOut`, `stopCops`.
+- **New snapshot fields:** `difficulty`, `rv.roofRook`, `rv.stopped`, `crew.regen`, `bustInfo`, `roof` (Rook's: guns,
+  ammo, reload, availability), `stop.doc`, `stop.docShop`, `copFx`. `EndResult` gains `difficulty` and `scoreMult`.
+- **Port order:**
+  1. `withDifficulty`.
+  2. Bust grace + regen.
+  3. Stop flow with `shopEnter`.
+  4. Roof guns (EditMode tests: `sim/test/roof-defend.js`).
+  5. Cop states 9/10 + return fire.
+  6. The FP shop scenes.
+  7. Doc's FP lab camera.
+  8. The new HUD (UI Toolkit with the `tokens.css` values as USS variables).

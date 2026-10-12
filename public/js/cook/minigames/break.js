@@ -64,7 +64,8 @@ export class BreakGame extends Minigame {
       const d = hDist(nx, ny, p.x, p.y);
       if (d < bd) { bd = d; best = i; }
     });
-    const inSlab = Math.abs(ny - SLAB_Y) < SLAB_H * 0.75 && Math.abs((nx - SLAB_X) * 4 / 3) < SLAB_W * 0.62;
+    const zs = this.zoneScale;   // difficulty: how forgiving a tap near the slab is
+    const inSlab = Math.abs(ny - SLAB_Y) < SLAB_H * 0.75 * zs && Math.abs((nx - SLAB_X) * 4 / 3) < SLAB_W * 0.62 * Math.max(1, zs);
     return inSlab ? best : -1;
   }
 

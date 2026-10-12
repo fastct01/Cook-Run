@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cook &amp; Run — HUD test</title>
+<link rel="icon" href="data:,">
+<!-- same order index.html should use: fonts + tokens first -->
+<link rel="stylesheet" href="css/fonts.css">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/hud.css">
+<style>
+  /* harness only: a static screenshot of the scene stands in for the 3D view */
+  #bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+  #bg.desert { background: linear-gradient(180deg, #34405f 0%, #6d5266 30%, #b06d5c 46%, #c98f62 52%, #9b6a48 53%, #7c5638 100%); }
+  #rv { position: absolute; left: 54%; top: 23%; width: 42%; max-width: 544px; display: none; filter: drop-shadow(0 18px 18px rgba(30,10,10,.35)); }
+  body.end-bg #rv { display: block; }
+  #dbg { position: fixed; left: 50%; bottom: 0; transform: translateX(-50%); z-index: 99; display: flex; flex-wrap: wrap; gap: 3px; justify-content: center; max-width: 96vw;
+         font: 600 10px/1 system-ui, sans-serif; padding: 4px; background: rgba(0,0,0,.55); border-radius: 6px 6px 0 0; }
+  #dbg a { color: #F2B90F; text-decoration: none; padding: 3px 5px; border-radius: 4px; background: rgba(255,255,255,.06); }
+  #dbg a.on { background: #F2B90F; color: #17130A; }
+  body.shot #dbg { display: none; }
+</style>
+</head>
+<body>
+<div id="game">
+  <div id="viewWrap">
+    <div id="bg"></div>
+    <img id="rv" src="test-assets/cut-rv.png" alt="">
+    <div id="hud"></div>
+    <div id="touch" aria-hidden="true"></div>
+  </div>
+  <div id="overlay" hidden></div>
+</div>
+<div id="dbg"></div>
+<script type="module">
+// ─────────────────────────────────────────────────────────────────────────────
+// HUD harness (agent HUD, Round 3). No WebGL: a static mockup background + fake snapshots.
+//   hud-test.html?s=<state>[&shot]          one state (see STATES below); &shot hides the debug bar
+//   window.__ready → true once the state has settled; window.__hud → the Hud; window.__states → names
+// ─────────────────────────────────────────────────────────────────────────────
+import { loadData } from './js/data/loadData.js';
+import { Hud } from './js/ui/hud.js';
+
+const q = new URLSearchParams(location.search);
+if (q.has('shot')) document.body.classList.add('shot');
+const raw = await loadData();
+let withDifficulty = null;
+try { ({ withDifficulty } = await import('./js/shared/difficulty.js')); } catch { /* SIM's module not there yet */ }
+const dataFor = (lvl) => (withDifficulty ? withDifficulty(raw, lvl) : raw);
+
+const STOP = Object.fromEntries(raw.route.stops.map((s) => [s.id, s]));
+const merge = (a, b) => {
+  if (b === undefined) return a;
+  if (b === null || typeof b !== 'object' || Array.isArray(b)) return b;
+  const o = { ...(a && typeof a === 'object' && !Array.isArray(a) ? a : {}) };
+  for (const k of Object.keys(b)) o[k] = merge(o[k], b[k]);
+  return o;
+};
+const roofIdle = { active: false, climbing: false, climbDir: null, climb: 0, onRoof: false, ai: false, available: false, why: 'noHeat', nearCop: 999 };
+function nearStopAt(z, looted = []) {
+  let best = null;
+  for (const s of raw.route.stops) {
+    if (looted.includes(s.id)) continue;
+    const d = s.z - z;
+    if (d < -s.lotLength / 2 || d > 800) continue;
+    if (!best || d < best.dist) best = { id: s.id, name: s.name, dist: Math.max(0, d), side: s.side, z: s.z };
+  }
+  return best;
+}
+// a protocol-shaped snapshot (Round 3 fields included)
+function snap(o = {}) {
+  const z = o.z ?? 4160;
+  const looted = o.looted || [];
+  const base = {
+    t: 100, phase: 'drive', countdown: 0, lostReason: null, difficulty: 'hard',
+    rv: { x: 0, y: 0, z, yaw: 0, pitch: 0, roll: 0, speed: 17.8, steer: 0, hp: 92, airborne: false, nitro: 0, regen: false, roofDoc: false, roofRook: false, stopped: 0 },
+    crew: { driver: 100, cook: 46, cookDown: false, regen: { driver: false, cook: true } },
+    heat: { value: 2.62, stars: 2, seen: true, gaveUp: false, unseen: 0 },
+    bust: 0, bustInfo: { grace: 3, armed: false, defended: false },
+    score: { points: 3480, chaos: 3, knocked: 1, smashed: 4, copsWrecked: 0 },
+    inv: { mat: {}, units: 1, quality: 0.82, gadgets: { smoke: 2, oil: 1, nitro: 0 } },
+    stop: null, nearStop: nearStopAt(z, looted), bridge: { dist: raw.route.bridge.lip - z, speedNeeded: raw.route.bridge.minSpeedHint },
+    area: { id: 'downtown', name: 'Downtown' }, timeOfDay: 10.2, dist: z, routeLength: raw.route.routeLength,
+    feel: { latAcc: 0, bump: 0, speed: 17.8 }, alert: { copClose: false, copDist: 99 },
+    lab: { fumes: 0.2, fire: 0, ventOpen: false, curtains: true, cooking: true, stepType: 'heat', temp: 186 },
+    roof: roofIdle, looted, closed: o.closed || [], maxStars: 2, ents: [], events: [],
+  };
+  const s = merge(base, o);
+  s.looted = looted; s.events = o.events || [];
+  return s;
+}
+const ev = (type, o = {}) => ({ type, ...o });
+const shopStop = (id, extra = {}) => ({ id, name: STOP[id].name, state: 'shopping', shopType: STOP[id].shopType, shopT: 30, shopMax: 90, loadT: 0, progress: 0, blocked: false, copDist: 999, side: STOP[id].side, doc: 'out', docShop: null, ...extra });
+
+// ── states (each matches a mockup, or a state the mockups don't draw) ──────────
+const RESULT = { won: true, reason: 'won', units: 6, quality: 0.86, payout: 48600, points: 12480, chaos: 14, knocked: 5, copsWrecked: 14, timeSec: 2292, stars: 3, maxStars: 4 };
+const STATES = {
+  // Driver-HUD.png — driving, 2★ seen, next stop 640 m, Doc cooking, near-miss toast, Doc healing
+  driving: { bg: 'bg-city', fp: true, look: 0, pre: [snap({ events: [ev('recipeOk'), ev('recipeOk')] })], snap: snap(),
+    after: (h) => h.toast('Near miss', 'info', { icon: 'star', value: '+250' }) },
+  // Driver-Defend.png — parked at Bolt & Barrel, Doc in the shop 2/3 · 0:21, cop 12 m, bust 40 %
+  defend: { bg: 'bg-defend', fp: true, look: 0,
+    pre: [snap({ z: 4800, t: 96, events: [ev('gadget', { gadget: 'smoke' })] })],
+    snap: snap({ z: 4800, t: 98.4, rv: { speed: 0, hp: 78, stopped: 9 }, crew: { cook: 64, regen: { cook: false } }, heat: { value: 3.18, stars: 3 }, bust: 0.4, bustInfo: { grace: 0, armed: true },
+      inv: { gadgets: { smoke: 1, oil: 1, nitro: 0 } }, area: { name: 'Downtown' },
+      stop: shopStop('hardware', { docShop: { stopId: 'hardware', label: '2/3', frac: 0.66, tLeft: 21 } }),
+      roof: { ...roofIdle, available: true, why: null, nearCop: 12 } }) },
+  // HUD-Kit — cooling 3★ draining blue
+  cooling: { bg: 'bg-city', fp: true, look: 0.55, snap: snap({ z: 9050, heat: { value: 3.4, stars: 3, seen: false, unseen: 9.2 }, area: { name: 'Old Town' }, looted: ['hardware'], inv: { units: 2 }, score: { points: 5210 } }) },
+  // max heat: 5★ locked red; moving with a cop alongside → DEFEND locked; nitro burning
+  max: { bg: 'bg-defend', fp: true, look: 0,
+    pre: [snap({ z: 21350, t: 99 })],
+    snap: snap({ z: 21400, heat: { value: 5.6, stars: 5, seen: true }, area: { name: 'Interstate 9' }, looted: ['hardware', 'market', 'chandlery', 'gas_ice'], inv: { units: 3, gadgets: { smoke: 0, oil: 0, nitro: 1 } },
+      rv: { speed: 24, nitro: 0.6 }, score: { points: 9120 }, roof: { ...roofIdle, available: false, why: 'moving', nearCop: 18 } }) },
+  // climbing (Held) — 60 % up the ladder
+  climbing: { bg: 'bg-defend', fp: true, look: 0,
+    snap: snap({ z: 9480, rv: { speed: 0 }, heat: { value: 2.3, stars: 2 }, bust: 0.12, area: { name: 'Old Town' }, looted: ['hardware'],
+      roof: { ...roofIdle, active: true, climbing: true, climbDir: 'up', climb: 0.6, available: false, why: null, nearCop: 21 } }) },
+  // Defend ready away from a stop, look-around running (active), stop banner "Pull in"
+  ready: { bg: 'bg-city', fp: true, lookActive: true,
+    snap: snap({ z: 4740, rv: { speed: 0.4 }, heat: { value: 1.5, stars: 1 }, bustInfo: { grace: 2.2, armed: false }, roof: { ...roofIdle, available: true, why: null, nearCop: 26 } }) },
+  // low HP (< 25 % turns red), Rook + hull regen pulses, missed-it banner
+  lowhp: { bg: 'bg-city', fp: true, look: 0,
+    pre: [snap({ z: 9400, looted: ['hardware'] })],
+    snap: snap({ z: 9620, rv: { hp: 18, regen: true }, crew: { driver: 64, cook: 30, regen: { driver: true, cook: false } }, heat: { value: 1.8, stars: 1, seen: false, unseen: 2 }, looted: ['hardware'], area: { name: 'Old Town' }, nearStop: null, closed: ['market'] }) },
+  // loading at a stop (hold still) + Doc chip loading + cops called chip
+  loading: { bg: 'bg-defend', fp: true, look: 0,
+    pre: [snap({ z: 9500, t: 96, events: [ev('stopCops', { stopId: 'market', count: 2, eta: 12 })] })],
+    snap: snap({ z: 9500, rv: { speed: 0 }, heat: { value: 1.2, stars: 1, seen: false, unseen: 3 }, looted: ['hardware'], area: { name: 'Old Town' }, inv: { units: 2 },
+      stop: { ...shopStop('market'), state: 'loading', doc: 'in', progress: 0.45, loadT: 2.2 }, roof: { ...roofIdle, available: true, why: null, nearCop: 999 } }) },
+  // the canyon bridge speed check + toasts
+  bridge: { bg: 'bg-city', fp: false, look: null,
+    snap: snap({ z: 38560, rv: { speed: 22 }, heat: { value: 0, stars: 0, seen: false }, inv: { units: 6, quality: 0.84 }, area: { name: 'Red Canyon' }, looted: ['hardware', 'market', 'chandlery', 'gas_ice', 'megamart', 'farm', 'junkyard', 'lastgas'], score: { points: 14820 } }),
+    after: (h) => { h.toast('Supplies loaded', 'good', { icon: 'bag', sub: '+2 Mesa Salts  +1 Canyon Solvent' }); h.toast('Hull hit', 'bad', { icon: 'truck', value: '−12' }); h.toast('Cops called', 'cops', { icon: 'binoc', value: '★3' }); } },
+  // Roof.png — DefendClient owns the camera; Wanted "Shots fired", toasts top-right, bars bottom-right
+  roof: { bg: 'bg-roof', mode: 'roof', fp: false,
+    pre: [snap({ z: 4800, t: 99.5, events: [ev('shot', { gun: 'rifle' }), ev('copDisabled', { copId: 12, how: 'tyre' })] })],
+    snap: snap({ z: 4800, t: 100, rv: { speed: 0, hp: 78 }, crew: { driver: 88, cook: 64, regen: { cook: false } }, heat: { value: 3.34, stars: 3 }, bust: 0.22,
+      stop: shopStop('hardware', { docShop: { label: '2/3', frac: 0.66, tLeft: 21 } }), roof: { ...roofIdle, active: true, onRoof: true, climb: 1, nearCop: 18 } }) },
+  // Cook-Lab.png — Doc in the van: Harbour Docks 12.2 km, next stop 400 m forklift run, Rook driving 64 km/h
+  'cook-lab': { bg: 'bg-lab2', role: 'cook', mode: 'lab',
+    snap: snap({ z: 12200, rv: { speed: 64 / 3.6 }, heat: { value: 2.4, stars: 2 }, inv: { units: 3 }, score: { points: 12480 }, looted: ['hardware', 'market'], area: { name: 'Harbour Docks' } }) },
+  // Cook-Shop.png — Doc's shop run: Rook on the roof bust 12 %, bars bottom-right
+  'cook-shop': { bg: 'bg-shop5', role: 'cook', mode: 'shop',
+    snap: snap({ z: 4800, rv: { speed: 0, hp: 78 }, crew: { driver: 88, cook: 64, regen: { cook: false } }, heat: { value: 3.34, stars: 3 }, bust: 0.12, inv: { units: 3 }, score: { points: 12480 },
+      stop: shopStop('hardware', { docShop: { label: '2/3', frac: 0.66, tLeft: 21 } }), roof: { ...roofIdle, active: true, onRoof: true, ai: false, climb: 1, nearCop: 14 } }) },
+  // Garage-Exit.png — engine running, everything at zero, Doc aboard
+  garage: { bg: 'bg-garage', fp: true, look: 0,
+    snap: snap({ z: 0, phase: 'garage', t: 40, rv: { speed: 2, hp: 100 }, crew: { driver: 100, cook: 100, regen: { cook: false } }, heat: { value: 0, stars: 0, seen: false }, inv: { units: 0, quality: 0, gadgets: { smoke: 0, oil: 0, nitro: 0 } },
+      score: { points: 0 }, area: { id: 'ironworks', name: 'Ironworks District' }, nearStop: null, lab: { cooking: false },
+      garage: { step: 6, stepId: 'crank', doc: { inRv: true }, rook: { inRv: true }, items: { engine: 'on' } } }) },
+  // countdown + caption + area title (big moments)
+  moments: { bg: 'bg-city', fp: true, look: 0,
+    pre: [snap({ phase: 'countdown', countdown: 2.4 })],
+    snap: snap({ phase: 'countdown', countdown: 2.4 }),
+    after: (h) => { h.caption('Runaway freight', 'Wagons rolling across the yard'); } },
+  area: { bg: 'bg-city', fp: true, look: 0, snap: snap({ z: 3020, heat: { value: 0.4, stars: 0, seen: false } }), after: (h) => h.areaTitle('Downtown', 10.2) },
+  // end screens: one per difficulty + a bust
+  'end-hard': { bg: 'desert', end: { ...RESULT, difficulty: 'hard', scoreMult: 1 }, lvl: 'hard', snap: snap({ z: 39800, area: { name: 'Starlite Drive-In' }, timeOfDay: 19.8, maxStars: 4 }) },
+  'end-easy': { bg: 'desert', end: { ...RESULT, units: 4, payout: 29400, stars: 2, difficulty: 'easy', scoreMult: 0.75 }, lvl: 'easy', snap: snap({ z: 39800, area: { name: 'Starlite Drive-In' }, timeOfDay: 19.5 }) },
+  'end-extreme': { bg: 'desert', end: { ...RESULT, units: 8, payout: 96200, difficulty: 'extreme', scoreMult: 1.5, maxStars: 5 }, lvl: 'extreme', snap: snap({ z: 39800, area: { name: 'Starlite Drive-In' }, timeOfDay: 19.9 }) },
+  'end-busted': { bg: 'bg-defend', end: { won: false, reason: 'busted', units: 3, quality: 0.71, payout: 0, points: 8200, chaos: 9, knocked: 2, copsWrecked: 6, timeSec: 1504, stars: 0, difficulty: 'extreme', scoreMult: 1.5 },
+    lvl: 'extreme', snap: snap({ z: 21400, lostReason: 'busted', area: { name: 'Interstate 9' }, timeOfDay: 14.4, maxStars: 5 }) },
+  // pause menu (main.js showNotice markup, styled by style.css)
+  pause: { bg: 'bg-city', fp: true, look: 0, snap: snap(), pause: true },
+  // phones
+  'phone-cook': { bg: 'bg-lab2', role: 'cook', mode: 'lab', snap: snap({ z: 12200, rv: { speed: 64 / 3.6 }, heat: { value: 2.4, stars: 2 }, inv: { units: 3 }, score: { points: 12480 }, looted: ['hardware', 'market'], area: { name: 'Harbour Docks' } }),
+    after: (h) => h.toast('Bag cooked', 'good', { icon: 'bag', sub: 'Q 82%', value: '+1' }) },
+  'phone-driver': { bg: 'bg-defend', fp: true, look: 0, touch: true,
+    snap: snap({ z: 4800, rv: { speed: 0, hp: 78 }, heat: { value: 3.18, stars: 3 }, bust: 0.4, bustInfo: { grace: 0, armed: true },
+      stop: shopStop('hardware', { docShop: { label: '2/3', frac: 0.66, tLeft: 21 } }), roof: { ...roofIdle, available: true, why: null, nearCop: 12 } }) },
+};
+
+// ── run one state ────────────────────────────────────────────────────────────
+const name = STATES[q.get('s')] ? q.get('s') : 'driving';
+const S = STATES[name];
+const role = S.role || 'driver';
+document.body.classList.add(`role-${role}`, role === 'cook' ? 'mode-online' : 'mode-solo');
+if (role === 'cook') document.body.classList.add('lab3d');   // the 3D van fills the screen (main.js does this)
+if (S.touch) document.body.classList.add('touch');
+const bg = document.getElementById('bg');
+if (S.bg === 'desert') { bg.classList.add('desert'); document.body.classList.add('end-bg'); }
+else bg.style.background = `#0E0F11 url(test-assets/${S.bg}.jpg) center / cover no-repeat`;
+
+const data = dataFor(S.lvl || 'hard');
+const hud = new Hud(document.getElementById('hud'), data, { role });
+window.__hud = hud;
+window.__states = Object.keys(STATES);
+hud.onDefend = () => { window.__defendClicks = (window.__defendClicks || 0) + 1; };
+if (name !== 'area') hud._area = S.snap.area?.name;   // harness: skip the automatic "Now entering" intro
+if (S.mode) hud.setMode(S.mode);
+if (role === 'driver') hud.setFirstPerson(!!S.fp);
+if (S.lvl) hud.setDifficulty(S.lvl);
+const look = () => {
+  if (role !== 'driver') return;
+  if (S.lookActive) { hud.setLookCooldown(0); hud.setLookCooldown(1); return; }
+  hud.setLookCooldown(S.look === undefined ? 0 : S.look);
+};
+for (const p of S.pre || []) { hud.update(p); look(); }
+hud.update(S.snap); look();
+S.after?.(hud);
+if (S.end) hud.showEnd(S.end, { onRestart() {}, onMenu() {}, canRestart: true, restartLabel: 'Play again', menuLabel: 'Back to lobby' });
+
+// pills + touch buttons exactly as main.js builds them
+const pills = document.createElement('div');
+pills.id = 'pills';
+pills.innerHTML = '<button type="button" class="pill" tabindex="-1">SOUND ON</button><button type="button" class="pill" tabindex="-1">PAUSE</button>';
+if (!S.end) document.getElementById('viewWrap').appendChild(pills);
+if (S.touch) {
+  const btns = [['tc-left', '◀'], ['tc-right', '▶'], ['tc-gas', 'GAS'], ['tc-brake', 'BRAKE'], ['tc-small tc-hb', 'DRIFT'], ['tc-small tc-horn', 'HORN'], ['tc-small tc-smoke', 'SMOKE'], ['tc-small tc-oil', 'OIL'], ['tc-small tc-nitro', 'NITRO']];
+  document.getElementById('touch').innerHTML = btns.map(([c, t]) => `<button type="button" tabindex="-1" class="tc ${c}">${t}</button>`).join('');
+}
+if (S.pause) {
+  const keys = [['W / ↑', 'Accelerate'], ['S / ↓', 'Brake / reverse'], ['A D / ← →', 'Steer'], ['Space', 'Handbrake'], ['F', 'Defend: climb onto the roof'], ['Q', 'Smoke bomb'], ['E', 'Oil slick'], ['Shift', 'Nitro'], ['C', 'Look around outside the RV'], ['Esc / P', 'Pause']];
+  const ov = document.getElementById('overlay');
+  ov.innerHTML = `<div class="ov-card" role="dialog" aria-modal="true" aria-label="Paused"><h2 class="ov-title">Paused</h2><p class="ov-sub">Get to the drive-in at the end of the desert with 6+ bags, the RV in one piece and nobody busted.</p>
+    <div class="ov-keys">${keys.map(([k, v]) => `<span><kbd>${k}</kbd></span><span>${v}</span>`).join('')}</div>
+    <div class="ov-btns"><button type="button" class="ov-btn primary">Resume</button><button type="button" class="ov-btn">Restart</button><button type="button" class="ov-btn">Quit to menu</button></div></div>`;
+  ov.hidden = false;
+}
+// keep feeding the same snapshot (the game calls update every frame) so timers / fades run
+let frames = 0;
+function tick() { hud.update(S.snap); look(); frames++; if (frames < 100000) requestAnimationFrame(tick); }
+requestAnimationFrame(tick);
+await document.fonts.ready;
+setTimeout(() => { window.__ready = true; }, 450);
+
+const dbg = document.getElementById('dbg');
+dbg.innerHTML = Object.keys(STATES).map((k) => `<a href="?s=${k}" class="${k === name ? 'on' : ''}">${k}</a>`).join('');
+</script>
+</body>
+</html>

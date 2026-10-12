@@ -220,15 +220,9 @@ export function buildInterior(data, { createModel } = {}) {
     wallX(kHigh, s, h0, h1, CUT, FY + 2.0, { cap: true });
     wallX(kLow, s, h1, d0, BODY0, CUT, { cap: true });
     wallX(kLow, s, d1, ZP + T / 2, BODY0, CUT, { cap: true });
-    // door: rust-red panel filling the opening, cut with the wall; frame; inside handle; step outside
+    // door: rust-red panel filling the opening — [R3-DOCFP] a separate hinged mesh (built below: doorLow cut for the
+    // overview, doorFull full height for first person) so the shop-run jump-out can swing it open; frame + step stay here
     const dx = -(XO - T / 2);
-    kLow.box((cx, cy, cz, nx) => (nx < -0.5 ? IPAL.door : nx > 0.5 ? shade(IPAL.door, 0.85) : shade(IPAL.door, 0.7)), [T - 0.02, CUT - 0.64, d1 - d0], [dx, (CUT + 0.64) / 2, (d0 + d1) / 2]);
-    capX(kLow, s, d0, d1, CUT);
-    kLow.rectX(shade(IPAL.door, 0.82), -XO - 0.004, [d0 + 0.1, d1 - 0.1], [0.82, 1.5], -1, { off: 0.003 });
-    kLow.rectX(shade(IPAL.door, 1.1), -XO - 0.006, [d0 + 0.14, d1 - 0.14], [0.86, 1.46], -1, { off: 0.003 });
-    kLow.rectX(PAL.rustDark, -XO - 0.008, [d0 + 0.3, d0 + 0.5], [0.7, 0.82], -1, { off: 0.003 });
-    kLow.rectX(shade(IPAL.door, 0.78), -XI + 0.012, [d0 + 0.08, d1 - 0.08], [FY + 0.12, CUT - 0.1], 1, { off: 0.003 });
-    for (const x of [-XO - 0.03, -XI + 0.03]) kLow.box(PAL.chrome, [0.05, 0.05, 0.14], [x, FY + 0.82, d1 - 0.12]);
     for (const z of [d0 - 0.035, d1 + 0.035]) kLow.box('#6b5d4e', [T + 0.02, CUT - 0.62, 0.05], [dx, (CUT + 0.62) / 2, z]);
     kLow.box('#5d5f61', [0.3, 0.06, d1 - d0 + 0.05], [-XO - 0.12, 0.42, (d0 + d1) / 2]);
     kLow.box('#4b4c4e', [0.04, 0.2, d1 - d0 + 0.05], [-XO - 0.26, 0.34, (d0 + d1) / 2]);
@@ -601,14 +595,16 @@ export function buildInterior(data, { createModel } = {}) {
     kHigh.rectX('#c97a4a', XI - 0.006, [-0.72, -0.58], [CUT + 0.2, CUT + 0.3], -1, { off: 0.003 });
     kHigh.rectX('#6f8fb0', XI - 0.006, [-0.72, -0.58], [CUT + 0.3, CUT + 0.35], -1, { off: 0.003 });
     // potted cactus + a coffee mug on the cut-wall cap (−X)
-    kLow.at([-XO + T / 2, CUT + 0.03, 1.72], (k) => {
+    // [R3-DOCFP] on little wall ledges (inside the wall line, so the first-person upper wall doesn't swallow them)
+    for (const z of [1.72, -0.72]) kLow.box(IPAL.woodLight, [0.13, 0.03, 0.24], [-XI + 0.05, CUT + 0.015, z]);
+    kLow.at([-XI + 0.06, CUT + 0.03, 1.72], (k) => {
       k.cyl('#b5562f', 0.055, 0.045, 0.09, [0, 0.045, 0], { seg: 8 });
       k.cyl('#5a4632', 0.05, 0.05, 0.01, [0, 0.088, 0], { seg: 8 });
       k.cyl(PAL.cactus, 0.022, 0.026, 0.16, [0, 0.17, 0], { seg: 6 });
       k.cyl(PAL.cactus, 0.014, 0.014, 0.06, [0.035, 0.18, 0], { seg: 5, rot: [0, 0, -0.9] });
       k.cyl(PAL.cactusLight, 0.012, 0.012, 0.05, [0.05, 0.215, 0], { seg: 5 });
     });
-    kLow.at([-XO + T / 2, CUT + 0.03, -0.72], (k) => {
+    kLow.at([-XI + 0.06, CUT + 0.03, -0.72], (k) => {
       k.cyl('#e9e2cf', 0.035, 0.032, 0.085, [0, 0.0425, 0], { seg: 8 });
       k.cyl('#3a2618', 0.03, 0.03, 0.005, [0, 0.083, 0], { seg: 8 });
       k.torus('#e9e2cf', 0.022, 0.007, [0, 0.045, 0.04], { rot: [0, Math.PI / 2, 0], rs: 4, ts: 8 });
@@ -686,6 +682,191 @@ export function buildInterior(data, { createModel } = {}) {
       curtains.push({ mesh: m, sign: 1, open: 0.22, closed: 1 });
     }
   }
+
+  // ── [R3-DOCFP] first-person shell + hinged side door ─────────────────────
+  // The overview keeps the cut-away; in first person (setViewMode('fp')) these add the missing upper walls
+  // (−X with three windows, rear with a taller window, the hull section's top), the coach ceiling (battens,
+  // skylight, light strip), the cab roof, the −X cab window and a bulkhead over the cab opening. Non-casting
+  // (the lab stays as bright as the dollhouse), receives shadows. 3 meshes + 6 curtains + the door (2–3).
+  const fpGroup = new THREE.Group();
+  fpGroup.name = 'fp_shell';
+  fpGroup.visible = false;
+  root.add(fpGroup);
+  const DOOR_TOP = FY + 1.95;
+  const FPWIN = [[-3.85, -3.1], [-1.75, -0.85], [0.95, 1.9]];   // −X windows (z ranges), same y band as +X
+  D.FPWIN = FPWIN; D.DOOR_TOP = DOOR_TOP;
+  {
+    const kF = new Kit(41), kFG = new Kit(42), kFL = new Kit(43);
+    const s = -1, dx = -(XO - T / 2);
+    const [d0, d1] = D.DOOR, [h0, h1] = D.HULL;
+    const wall = (z0, z1, y0, y1) => wallX(kF, s, z0, z1, y0, y1);
+    wall(ZRO, FPWIN[0][0], CUT, TOP);
+    wall(FPWIN[0][1], h0, CUT, TOP);
+    wall(h0, h1, FY + 2.0, TOP);
+    wall(h1, FPWIN[1][0], CUT, TOP);
+    wall(FPWIN[1][1], d0, CUT, TOP);
+    wall(d0, d1, DOOR_TOP, TOP);
+    wall(d1, FPWIN[2][0], CUT, TOP);
+    wall(FPWIN[2][1], ZP + T / 2, CUT, TOP);
+    for (const [z0, z1] of FPWIN) {
+      wall(z0, z1, CUT, D.WIN0);
+      wall(z0, z1, D.WIN1, TOP);
+      const x = -XO + T + 0.004;
+      kF.rectX(IPAL.frame, x, [z0 - 0.05, z1 + 0.05], [D.WIN0 - 0.05, D.WIN0], 1, { off: 0.003 });
+      kF.rectX(IPAL.frame, x, [z0 - 0.05, z1 + 0.05], [D.WIN1, D.WIN1 + 0.05], 1, { off: 0.003 });
+      kF.rectX(IPAL.frame, x, [z0 - 0.05, z0], [D.WIN0, D.WIN1], 1, { off: 0.003 });
+      kF.rectX(IPAL.frame, x, [z1, z1 + 0.05], [D.WIN0, D.WIN1], 1, { off: 0.003 });
+      kF.box(IPAL.trim, [0.06, 0.03, z1 - z0 + 0.1], [-XO + T + 0.03, D.WIN0 - 0.015, (z0 + z1) / 2]);
+      kF.cyl(IPAL.steelDark, 0.012, 0.012, z1 - z0 + 0.3, [-XO + T + 0.07, D.WIN1 + 0.08, (z0 + z1) / 2], { axis: 'z', seg: 6 });
+      kFG.rectX(IPAL.glass, -XO + T / 2, [z0, z1], [D.WIN0, D.WIN1], 1, { off: 0 });
+    }
+    // trim strips over the dark cut caps (they become a chair rail), door jambs + header
+    const trimX = (z0, z1, y) => kF.box(IPAL.trim, [T + 0.05, 0.034, z1 - z0], [dx, y + 0.016, (z0 + z1) / 2]);
+    trimX(ZRO, h0, CUT); trimX(h1, d0 - 0.06, CUT); trimX(d1 + 0.06, ZP + T / 2, CUT); trimX(h0, h1, FY + 2.0);
+    for (const z of [d0 - 0.035, d1 + 0.035]) kF.box('#6b5d4e', [T + 0.02, DOOR_TOP - CUT + 0.03, 0.05], [dx, (CUT + DOOR_TOP) / 2, z]);
+    kF.box('#6b5d4e', [T + 0.02, 0.05, d1 - d0 + 0.12], [dx, DOOR_TOP + 0.02, (d0 + d1) / 2]);
+    // rear: upper wall around a taller window (the low pane continues up), mullion over the cut
+    {
+      const tz = ZRI - ZRO, zc = (ZRO + ZRI) / 2, rw0 = -0.55, rw1 = 0.55, wTop = FY + 1.5;
+      const rearBox = (x0, x1, y0, y1) => {
+        const lv = levelsOf(y0, y1);
+        for (let i = 0; i < lv.length - 1; i++) {
+          const ya = lv[i], yb = lv[i + 1];
+          kF.box((cx, cy, cz, nx, ny, nz) => (nz < -0.5 ? extBand(cy) : nz > 0.5 ? inner(cy) : ny > 0.5 || ny < -0.5 ? IPAL.trim : IPAL.frame), [x1 - x0, yb - ya, tz], [(x0 + x1) / 2, (ya + yb) / 2, zc], { jit: 0.03 });
+        }
+      };
+      rearBox(-XO, rw0, CUT, TOP); rearBox(rw1, XO, CUT, TOP); rearBox(rw0, rw1, wTop, TOP);
+      kF.box(IPAL.trim, [XO + rw0 + 0.02, 0.034, tz + 0.05], [(-XO + rw0) / 2, CUT + 0.016, zc]);
+      kF.box(IPAL.trim, [XO - rw1 + 0.02, 0.034, tz + 0.05], [(XO + rw1) / 2, CUT + 0.016, zc]);
+      kF.box(IPAL.frame, [rw1 - rw0 + 0.1, 0.05, tz + 0.04], [0, CUT + 0.02, zc]);
+      const zi = ZRI + 0.004;
+      kF.rectZ(IPAL.frame, zi, [rw0 - 0.05, rw0], [CUT, wTop], 1, { off: 0.003 });
+      kF.rectZ(IPAL.frame, zi, [rw1, rw1 + 0.05], [CUT, wTop], 1, { off: 0.003 });
+      kF.rectZ(IPAL.frame, zi, [rw0 - 0.05, rw1 + 0.05], [wTop, wTop + 0.05], 1, { off: 0.003 });
+      kFG.rectZ(IPAL.glass, zc, [rw0, rw1], [CUT + 0.045, wTop], 1, { off: 0 });
+    }
+    // cab partition: wood rail over the cut, bulkhead above the cab opening (the over-cab bunk's face)
+    {
+      const yB = 2.2;
+      kF.box(IPAL.woodDark, [2 * XI, 0.034, T + 0.05], [0, CUT + 0.016, ZP]);
+      kF.box((cx, cy, cz, nx, ny, nz) => (nz < -0.5 ? IPAL.wall : nz > 0.5 ? '#3d3a36' : IPAL.trim), [2 * XI, TOP - yB, T], [0, (yB + TOP) / 2, ZP], { jit: 0.03 });
+      kF.box(IPAL.woodDark, [2 * XI, 0.05, T + 0.04], [0, yB, ZP]);
+      for (const x of [-XI + 0.03, XI - 0.03]) kF.box(IPAL.woodDark, [0.06, yB - CUT, 0.08], [x, (yB + CUT) / 2, ZP]);
+    }
+    // cab: roof (headliner) + the −X door window over the cut cab side
+    {
+      const z0 = ZP + T / 2, zw = 3.32, xs = -(CABX - 0.035);
+      kF.box((cx, cy, cz, nx, ny) => (ny < -0.5 ? '#c9bfa8' : PAL.rvBody), [2 * CABX, 0.06, 2.76 - ZP], [0, 2.17, (ZP + 2.76) / 2]);
+      kF.box(PAL.rvBody, [0.07, 0.06, zw - z0], [xs, CUT + 0.03, (z0 + zw) / 2]);
+      kF.box(PAL.rvBody, [0.07, 0.08, zw - z0 - 0.4], [xs, 2.1, (z0 + zw - 0.4) / 2]);
+      kF.box(PAL.rvBody, [0.07, 2.14 - CUT, 0.08], [xs, (CUT + 2.14) / 2, z0 + 0.04]);
+      kFG.flat(IPAL.glass, [[z0 + 0.08, CUT + 0.06], [2.95, CUT + 0.06], [2.78, 2.06], [z0 + 0.08, 2.06]], (z, y) => [xs, y, z], { facing: [-1, 0, 0], off: 0 });
+    }
+    // coach ceiling: headliner, battens, a frosted skylight and a light strip
+    {
+      const zc = (ZP + 0.04 + ZRO) / 2, L = ZP + 0.04 - ZRO;
+      kF.box((cx, cy, cz, nx, ny) => (ny < -0.5 ? '#ddd2b6' : PAL.rvBody), [2 * XO, 0.05, L], [0, TOP + 0.025, zc]);
+      for (let z = ZRI + 0.35; z < ZP - 0.2; z += 0.62) kF.box('#bcae8f', [2 * XI, 0.022, 0.05], [0, TOP - 0.011, z]);
+      // skylight over the door / measuring bench
+      const sz = 0.45, sx = -0.05;
+      for (const [w, l, x, z] of [[0.66, 0.06, sx, sz - 0.33], [0.66, 0.06, sx, sz + 0.33], [0.06, 0.72, sx - 0.33, sz], [0.06, 0.72, sx + 0.33, sz]]) kF.box('#8f8676', [w, 0.06, l], [x, TOP - 0.03, z]);
+      kFL.rectY('#dfe9e8', TOP - 0.004, [sx - 0.3, sx + 0.3], [sz - 0.3, sz + 0.3], { off: 0, facing: [0, -1, 0] });
+      kFL.rectY('#c9dadb', TOP - 0.006, [sx - 0.3, sx + 0.3], [sz - 0.02, sz + 0.02], { off: 0, facing: [0, -1, 0] });
+      // light strip (housing + glow) down the middle of the lab
+      kF.box(IPAL.steelDark, [0.16, 0.035, 1.3], [0.1, TOP - 0.018, -1.6]);
+      kFL.box('#fff2cc', [0.1, 0.012, 1.2], [0.1, TOP - 0.04, -1.6]);
+      kF.box(IPAL.steelDark, [0.16, 0.035, 0.7], [0.1, TOP - 0.018, 1.25]);
+      kFL.box('#fff2cc', [0.1, 0.012, 0.6], [0.1, TOP - 0.04, 1.25]);
+    }
+    const shell = kF.mesh('fp_shell_walls', interiorMaterial(), false);
+    shell.receiveShadow = true;
+    const glassM = new THREE.Mesh(kFG.geometry(), new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.22, depthWrite: false, side: THREE.DoubleSide }));
+    glassM.name = 'fp_shell_glass'; glassM.renderOrder = 2;
+    const glowM = new THREE.Mesh(kFL.geometry(), new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false, side: THREE.DoubleSide }));
+    glowM.name = 'fp_shell_glow';
+    fpGroup.add(shell, glassM, glowM);
+    // curtains on the new −X windows (animated with the others by hazards3d)
+    FPWIN.forEach(([z0, z1], wi) => {
+      const half = (z1 - z0) / 2 + 0.06, h = D.WIN1 - D.WIN0 + 0.16;
+      for (const end of [0, 1]) {
+        const m = new THREE.Mesh(curtainMesh(half, h, wi % 2 ? IPAL.curtainB : IPAL.curtainA, 80 + wi * 2 + end), interiorMaterial());
+        m.name = `curtain_fp${wi}_${end ? 'front' : 'rear'}`;
+        m.position.set(-(XO - T - 0.07), D.WIN1 + 0.08, end ? z1 + 0.05 : z0 - 0.05);
+        m.scale.set(1, 1, end ? -1 : 1);
+        m.receiveShadow = true;
+        fpGroup.add(m);
+        curtains.push({ mesh: m, sign: end ? -1 : 1, open: 0.24, closed: 1, fp: true });
+      }
+    });
+  }
+  // hinged side door (pivot on the rear jamb): low (cut, overview) and full-height (first person, with a window)
+  const doorPivot = new THREE.Group();
+  doorPivot.name = 'door_pivot';
+  const doorDims = { d0: D.DOOR[0], d1: D.DOOR[1], x: -(XO - T / 2), top: DOOR_TOP };
+  doorPivot.position.set(doorDims.x, 0, doorDims.d0);
+  root.add(doorPivot);
+  const doorKit = (full) => {
+    const k = new Kit(full ? 45 : 44);
+    const Lz = doorDims.d1 - doorDims.d0, x0 = doorDims.x, yTop = full ? DOOR_TOP : CUT;
+    const panelCol = (cx, cy, cz, nx) => (nx < -0.5 ? IPAL.door : nx > 0.5 ? shade(IPAL.door, 0.85) : shade(IPAL.door, 0.7));
+    const xo = -XO - x0, xi = -XI - x0;                       // outer / inner faces in door-local x
+    if (full) {
+      const w0 = 2.0, w1 = 2.45, zA = 0.16, zB = Lz - 0.16;     // window in the upper door
+      k.box(panelCol, [T - 0.02, w0 - 0.64, Lz], [0, (w0 + 0.64) / 2, Lz / 2]);
+      k.box(panelCol, [T - 0.02, yTop - w1, Lz], [0, (w1 + yTop) / 2, Lz / 2]);
+      k.box(panelCol, [T - 0.02, w1 - w0, zA], [0, (w0 + w1) / 2, zA / 2]);
+      k.box(panelCol, [T - 0.02, w1 - w0, Lz - zB], [0, (w0 + w1) / 2, (zB + Lz) / 2]);
+      for (const xx of [xo - 0.004, xi + 0.004]) {
+        const f = xx < 0 ? -1 : 1;
+        k.rectX(IPAL.frame, xx, [zA - 0.03, zB + 0.03], [w0 - 0.03, w0], f, { off: 0.003 });
+        k.rectX(IPAL.frame, xx, [zA - 0.03, zB + 0.03], [w1, w1 + 0.03], f, { off: 0.003 });
+        k.rectX(IPAL.frame, xx, [zA - 0.03, zA], [w0, w1], f, { off: 0.003 });
+        k.rectX(IPAL.frame, xx, [zB, zB + 0.03], [w0, w1], f, { off: 0.003 });
+      }
+      k.rectX(shade(IPAL.door, 0.78), xi + 0.012, [0.08, Lz - 0.08], [FY + 0.12, 1.88], 1, { off: 0.003 });
+    } else {
+      k.box(panelCol, [T - 0.02, yTop - 0.64, Lz], [0, (yTop + 0.64) / 2, Lz / 2]);
+      k.box(IPAL.cut, [T + 0.03, 0.03, Lz], [0, yTop + 0.015, Lz / 2]);
+      k.box(IPAL.cutEdge, [0.012, 0.031, Lz], [xi + 0.006, yTop + 0.0155, Lz / 2]);
+      k.rectX(shade(IPAL.door, 0.78), xi + 0.012, [0.08, Lz - 0.08], [FY + 0.12, CUT - 0.1], 1, { off: 0.003 });
+    }
+    k.rectX(shade(IPAL.door, 0.82), xo - 0.004, [0.1, Lz - 0.1], [0.82, 1.5], -1, { off: 0.003 });
+    k.rectX(shade(IPAL.door, 1.1), xo - 0.006, [0.14, Lz - 0.14], [0.86, 1.46], -1, { off: 0.003 });
+    k.rectX(PAL.rustDark, xo - 0.008, [0.3, 0.5], [0.7, 0.82], -1, { off: 0.003 });
+    for (const xx of [xo - 0.03, xi + 0.03]) k.box(PAL.chrome, [0.05, 0.05, 0.14], [xx, FY + 0.82, Lz - 0.12]);
+    const m = k.mesh(full ? 'door_full' : 'door_low', interiorMaterial(), true);
+    m.visible = !full;
+    return m;
+  };
+  const doorLow = doorKit(false), doorFull = doorKit(true);
+  doorPivot.add(doorLow, doorFull);
+  const doorGlass = (() => {
+    const Lz = doorDims.d1 - doorDims.d0;
+    const g = new THREE.PlaneGeometry(Lz - 0.32, 0.45).rotateY(Math.PI / 2).translate(0, 2.225, Lz / 2);
+    const m = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: IPAL.glass, transparent: true, opacity: 0.22, depthWrite: false, side: THREE.DoubleSide }));
+    m.name = 'door_glass'; m.renderOrder = 2; m.visible = false;
+    return m;
+  })();
+  doorPivot.add(doorGlass);
+  // shop-run marker: a glowing amber outline on the inside of the door (shown while a run is due)
+  const doorGlow = (() => {
+    const k = new Kit(46);
+    const x = -XI + 0.03, z0 = doorDims.d0 + 0.02, z1 = doorDims.d1 - 0.02, y0 = FY + 0.02, y1 = DOOR_TOP - 0.03, w = 0.05;
+    k.box('#F2B90F', [0.01, y1 - y0, w], [x, (y0 + y1) / 2, z0 + w / 2]);
+    k.box('#F2B90F', [0.01, y1 - y0, w], [x, (y0 + y1) / 2, z1 - w / 2]);
+    k.box('#F2B90F', [0.01, w, z1 - z0], [x, y1 - w / 2, (z0 + z1) / 2]);
+    k.box('#F2B90F', [0.01, w, z1 - z0], [x, y0 + w / 2, (z0 + z1) / 2]);
+    // floor chevrons leading to the door
+    for (let i = 0; i < 3; i++) {
+      const xc = -0.15 - i * 0.22;
+      k.flat('#F2B90F', [[xc, -0.09], [xc - 0.1, 0], [xc, 0.09], [xc - 0.04, 0.09], [xc - 0.14, 0], [xc - 0.04, -0.09]].map(([a, b]) => [a, b]), (a, b) => [a, FY + 0.012, (doorDims.d0 + doorDims.d1) / 2 + b], { facing: [0, 1, 0], off: 0 });
+    }
+    const m = new THREE.Mesh(k.geometry(), new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9, depthWrite: false, toneMapped: false }));
+    m.name = 'door_glow'; m.renderOrder = 4; m.visible = false;
+    return m;
+  })();
+  root.add(doorGlow);
+  const doorStand = { x: -0.72, z: (doorDims.d0 + doorDims.d1) / 2 };
 
   // ── vent fan (named fan_blades) + exterior louvers ──────────────────────
   const ventZ = stationById.vent.z, ventY = FY + 1.55;
@@ -902,8 +1083,8 @@ export function buildInterior(data, { createModel } = {}) {
   const stationPicks = [];
   for (const st of van.stations) {
     const a = anchors[st.id];
-    let size = [0.9, 1.0, 0.63], c = [0, -0.45, -0.315];
-    if (st.kind === 'wall') { size = [0.8, 1.4, 0.3]; c = [0, 0.2, -0.45]; }
+    let size = [0.9, 1.4, 0.63], c = [0, -0.25, -0.315];   // [R3-DOCFP] up to 0.45 m over the top: first-person look picks the props too
+    if (st.kind === 'wall') { size = [st.id === 'curtains' ? 0.32 : 0.8, 1.4, 0.3]; c = [0, 0.2, -0.45]; }   // [R3-DOCFP] the cord is thin: don't steal the side door
     if (st.kind === 'board') { size = [1.1, 1.0, 0.3]; c = [0, 0.55, -0.5]; }
     if (st.kind === 'shelf') { size = [0.9, 1.9, 0.45]; c = [0, 0.0, -0.22]; }
     if (st.kind === 'crate') { size = [0.8, 0.6, 0.6]; c = [0, -0.65, -0.3]; }
@@ -914,6 +1095,12 @@ export function buildInterior(data, { createModel } = {}) {
     a.add(m);
     stationPicks.push(m);
   }
+  // [R3-DOCFP] the side door (shop run): its own pick volume, not a van.json station
+  const doorPick = new THREE.Mesh(new THREE.BoxGeometry(0.5, DOOR_TOP - FY, doorDims.d1 - doorDims.d0), pickMat);
+  doorPick.position.set(-XI + 0.2, (FY + DOOR_TOP) / 2, (doorDims.d0 + doorDims.d1) / 2);
+  doorPick.name = 'pick_door';
+  doorPick.userData.station = 'door';
+  root.add(doorPick);
 
   // ── bake the kits ────────────────────────────────────────────────────────
   const low = kLow.mesh('interior_shell_low', interiorMaterial(), true);
@@ -943,12 +1130,22 @@ export function buildInterior(data, { createModel } = {}) {
     for (const t of owned.texs) t && t.dispose();
   };
 
+  // [R3-DOCFP] 'fp' shows the full-height shell, the tall door and the −X curtains; 'overview' is the cut-away
+  let viewMode = 'overview';
+  const setViewMode = (mode) => {
+    viewMode = mode === 'fp' ? 'fp' : 'overview';
+    const fp = viewMode === 'fp';
+    fpGroup.visible = fp;
+    doorLow.visible = !fp; doorFull.visible = fp; doorGlass.visible = fp;
+    doorGlow.scale.y = 1;
+  };
   return {
-    root, dims: D, anchors, stations: van.stations, stationById, dispose,
+    root, dims: D, anchors, stations: van.stations, stationById, dispose, setViewMode, get viewMode() { return viewMode; },
     parts: {
       low, high, glow, glass, wheels, wheelDefs, curtains, fanBlades, louvers, jars, jarSlots, bags, bagSlots, MAX_BAGS,
       hull, hullHoles, extinguisher, extHome, steeringWheel, wheelPivot, rook, board, calendar, ring, arrow, warm, fxLight,
       floorPick, stationPicks, ventPos: new THREE.Vector3(XO + 0.12, ventY, ventZ),
+      fpGroup, doorPivot, doorLow, doorFull, doorGlass, doorGlow, doorPick, doorStand, doorDims,
     },
   };
 }

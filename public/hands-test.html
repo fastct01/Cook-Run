@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cook &amp; Run — FP hands test</title>
+<link rel="icon" href="data:,">
+<style>
+  html, body { margin: 0; height: 100%; background: #1a1c1f; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #lbl { position: fixed; left: 12px; top: 10px; color: #f1ece4; font: 700 14px system-ui, sans-serif; }
+</style>
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="lbl"></div>
+<script type="module">
+// Harness for the shared first-person hands (onfoot/fpHands.js).
+//   hands-test.html?pose=idle|walk|grab|carry|push|pump|lever|torch|pour|grind|spray[&act=0.5][&gloves=0][&walk=1][&pitch=-0.4]
+// window.__hands = { hands, setPose(name), act, ready }
+import * as THREE from 'three';
+import { createFpHands } from './js/onfoot/fpHands.js';
+const q = new URLSearchParams(location.search);
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(1);
+renderer.setSize(innerWidth, innerHeight, false);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#8fa3ad');
+scene.add(new THREE.HemisphereLight('#dfe8ef', '#5b4a3a', 1.6));
+const sun = new THREE.DirectionalLight('#fff1dc', 2.2); sun.position.set(3, 6, 2); scene.add(sun);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshLambertMaterial({ color: '#7a6a58' }));
+floor.rotation.x = -Math.PI / 2; scene.add(floor);
+for (let i = 0; i < 8; i++) {
+  const b = new THREE.Mesh(new THREE.BoxGeometry(1, 2 + (i % 3), 1), new THREE.MeshLambertMaterial({ color: ['#a55', '#5a7', '#57a', '#aa5'][i % 4] }));
+  b.position.set(Math.cos(i) * 5, 1, -4 - (i % 4) * 2 + Math.sin(i) * 2); scene.add(b);
+}
+// a wall right in front, to prove the overlay never clips
+const wall = new THREE.Mesh(new THREE.BoxGeometry(3, 3, 0.1), new THREE.MeshLambertMaterial({ color: '#cbb89a' }));
+wall.position.set(0.8, 1.5, -0.45); if (q.has('wall')) scene.add(wall);
+const camera = new THREE.PerspectiveCamera(+(q.get('fov') || 70), innerWidth / innerHeight, 0.03, 200);
+camera.position.set(0, 1.62, 0);
+camera.rotation.order = 'YXZ';
+const pitch = +(q.get('pitch') || 0);
+camera.rotation.x = pitch;
+scene.add(camera);
+const hands = createFpHands({ gloves: q.get('gloves') !== '0' });
+camera.add(hands.root);
+const pose = q.get('pose') || 'idle';
+hands.setPose(pose, 0.01);
+if (q.has('side')) { hands.root.rotation.y = q.get('side') === 'r' ? -1.2 : 1.2; hands.root.position.set(q.get('side') === 'r' ? 0.5 : -0.5, 0, 0); }
+// held props by pose
+const prop = (() => {
+  if (pose === 'carry') { const m = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.3, 0.32), new THREE.MeshLambertMaterial({ color: '#b98a52' })); hands.hold(m, 'both'); return m; }
+  if (pose === 'torch' || pose === 'pump') {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.2, 10), new THREE.MeshLambertMaterial({ color: '#333' }));
+    body.rotation.x = Math.PI / 2; body.position.z = -0.03; g.add(body);
+    const head = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.02, 0.05, 10), new THREE.MeshLambertMaterial({ color: '#555', emissive: '#332' }));
+    head.rotation.x = Math.PI / 2; head.position.z = -0.15; g.add(head);
+    hands.hold(g, 'r'); return g;
+  }
+  return null;
+})();
+document.getElementById('lbl').textContent = pose + (q.has('act') ? ' act=' + q.get('act') : '');
+const act = +(q.get('act') || 0), walk = +(q.get('walk') || 0);
+let last = performance.now(), frames = 0;
+// ext=front|side|top: an outside camera looking at the hands (the FP camera stays where it is)
+let extCam = null;
+if (q.has('ext')) {
+  extCam = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.01, 50);
+  const e = q.get('ext');
+  const at = new THREE.Vector3(0, 1.62 - 0.2, -0.38);
+  extCam.position.copy(e === 'side' ? new THREE.Vector3(0.85, 1.5, -0.35) : e === 'top' ? new THREE.Vector3(0, 2.4, -0.3) : new THREE.Vector3(0.1, 1.55, -1.3));
+  extCam.lookAt(at); scene.add(extCam);
+}
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  hands.update(dt, { walk, act, act2: -act, pitch });
+  renderer.render(scene, extCam || camera);
+  frames++;
+  if (frames > 3) window.__hands.ready = true;
+  window.__hands.calls = renderer.info.render.calls;
+  requestAnimationFrame(frame);
+}
+window.__hands = { hands, ready: false };
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -10,6 +10,7 @@ import * as THREE from 'three';
 import { ATLAS } from '../textures.js';
 import { XATLAS } from './atlas.js';
 import { splatTexture, PAINT_COLORS } from './models.js';
+import { copDamage, disposeCopDamage } from './copDamage.js';   // R3-DEFEND: gun damage, states 9/10
 
 const _v = new THREE.Vector3();
 const DARK = new THREE.Color(0.38, 0.36, 0.35), WHITE = new THREE.Color(1, 1, 1);
@@ -150,9 +151,11 @@ export function copStatus(E, rec, def, dt) {
       P.spawn({ x: _v.x, y: _v.y, z: _v.z, vx: rec.vx, vy: -0.3, vz: rec.vz, gravity: 9.8, life: 0.6, size: 0.15, size1: 0.12, r: c.r, g: c.g, b: c.b, cell: XATLAS.DROP, floor: rec.y + 0.02 });
     }
   } else if (rec.splat) rec.splat.visible = false;
+  try { wob += copDamage(E, rec, def, dt); } catch (e) { if (!E._r3dmgWarned) { E._r3dmgWarned = true; console.error('[ents] cop damage', e); } }   // R3-DEFEND
   return wob;
 }
 
 export function disposeCopFx(rec) {
   if (rec.splat) { rec.splat.removeFromParent(); rec.splat = null; }
+  disposeCopDamage(rec);   // R3-DEFEND
 }

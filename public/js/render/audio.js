@@ -10,6 +10,17 @@
 //   audio.indicator(on|null)             // force the turn-signal tick (null = automatic near stops)
 //   audio.setMuted(bool); audio.muted    // M key: audio.setMuted(!audio.muted)
 //   audio.setVolume(0..1); audio.play(name, ...args); audio.inspect(); audio.destroy()
+//   R3-CAB — helpers for other modules (DEFEND gunshots etc.):
+//   audio.context()                      // → the AudioContext (null until unlocked by a user gesture)
+//   audio.ctx                            // same, as a getter
+//   audio.bus()                          // → a GainNode to connect SFX to (→ muffle → master: respects mute/volume); null until unlocked
+//   audio.noise()                        // → the shared 2 s white-noise AudioBuffer (null until unlocked)
+//   audio.registerSfx(name, (ctx, out, opts) => dur?)   // register a synth one-shot (any time, even before unlock).
+//                                        //   out = a per-call GainNode(+StereoPanner)(+lowpass) already wired to bus();
+//                                        //   opts = the sfx() opts + { t0, noise, rate }; return its length in s (default 3)
+//   audio.sfx(name, { gain=1, pan=0, rate=1, delay=0, lowpass=null })  // play it → bool (false if locked/muted/unknown)
+//   audio.hasSfx(name)
+//   Cab one-shots: audio.play('stalk', on)  // wiper/indicator stalk click;  audio.play('wipe') // one blade sweep
 //
 // Engine: a carbureted big-block V8 behind a 3-speed automatic. One PeriodicWave oscillator per
 // bank at the engine-CYCLE frequency (rpm/120) whose harmonics encode 8 uneven firing pulses per
@@ -178,6 +189,8 @@ export function createAudio({ volume = 0.8, route = null } = {}) {
   let prevGear = 1, prevThr = 0, burbleT = 0, burbleNext = 0, prevEngine = null, catchT = 0, crank = false;
   let prevBump = 0, rattleCd = 0, prevSpeed = 0, decel = 0;
   let indicatorForce = null, indT = 0, indOn = false;
+  let sfxOut = null;                                      // R3-CAB: GainNode for registered SFX → bus
+  const REG = new Map();                                  // R3-CAB: registered SFX: name → (ctx, out, opts) => dur?
   let mooT = 3, drumNext = 0, drumBeat = 0, brassOn = false;
   const AC = typeof window !== 'undefined' ? (window.AudioContext || window.webkitAudioContext) : null;
 
@@ -191,6 +204,7 @@ export function createAudio({ volume = 0.8, route = null } = {}) {
     muffle = ctx.createBiquadFilter(); muffle.type = 'lowpass'; muffle.frequency.value = 18000; muffle.Q.value = 0.5;
     bus = ctx.createGain(); bus.gain.value = 1;
     bus.connect(muffle); muffle.connect(master); master.connect(comp); comp.connect(ctx.destination);
+    sfxOut = ctx.createGain(); sfxOut.gain.value = 1; sfxOut.connect(bus);
     noiseBuf = makeNoise(ctx, 2);
     gravelBuf = makeGravel(ctx, 1.5);
     try { buildLoops(); } catch (e) { console.warn('[audio] build failed', e); }
@@ -408,11 +422,51 @@ export function createAudio({ volume = 0.8, route = null } = {}) {
       }
     },
     ding(k = 1) { tone('triangle', 1250, 1250, 0.5, 0.11 * k, 0, null, 0.002); tone('sine', 1870, 1870, 0.4, 0.07 * k, 0, null, 0.002); },
+    // R3-CAB: column stalk detent click (wiper / indicator), plastic + spring
+    stalk(on = true) {
+      burst(0.012, on ? 3400 : 2900, 3, 0.16, 'bandpass');
+      tone('square', on ? 1500 : 1250, on ? 1100 : 950, 0.022, 0.05, 0.002, { type: 'bandpass', f: 1800, q: 4 }, 0.001);
+      burst(0.03, 900, 1.2, 0.05, 'lowpass', 0.012);
+    },
+    // R3-CAB: one wiper sweep: soft rubber squeak-swish over dry-ish glass + the motor's park click
+    wipe(k = 1) {
+      burst(0.42, 1600, 0.9, 0.035 * k, 'bandpass', 0, 2600);
+      tone('sine', 140, 120, 0.4, 0.02 * k, 0, { type: 'lowpass', f: 400 }, 0.05);
+    },
   };
 
   function play(name, ...args) {
     if (!ctx || muted || ctx.state !== 'running' || !SFX[name]) return;
     try { SFX[name](...args); } catch (e) { /* ignore */ }
+  }
+
+  // ── R3-CAB: SFX registry for other modules (DEFEND gunshots, …) ─────────────
+  function registerSfx(name, fn) {
+    if (typeof name !== 'string' || typeof fn !== 'function') return false;
+    REG.set(name, fn);
+    return true;
+  }
+  function sfx(name, opts = {}) {
+    if (!ctx || muted || ctx.state !== 'running' || !sfxOut) return false;
+    const fn = REG.get(name);
+    if (!fn) { if (SFX[name]) { play(name); return true; } return false; }
+    const o = opts || {};
+    const t0 = ctx.currentTime + Math.max(0, o.delay || 0);
+    let g = null, pn = null, lp = null;
+    try {
+      g = ctx.createGain(); g.gain.value = clamp(o.gain ?? 1, 0, 4);
+      let head = g, tail = g;
+      if (o.lowpass) { lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = clamp(o.lowpass, 60, 20000); lp.Q.value = 0.7; tail.connect(lp); tail = lp; }
+      if (o.pan && ctx.createStereoPanner) { pn = ctx.createStereoPanner(); pn.pan.value = clamp(o.pan, -1, 1); tail.connect(pn); tail = pn; }
+      tail.connect(sfxOut);
+      const dur = fn(ctx, head, { ...o, gain: o.gain ?? 1, pan: o.pan ?? 0, rate: o.rate ?? 1, t0, noise: noiseBuf });
+      const life = (typeof dur === 'number' && dur > 0 ? dur : 3) + Math.max(0, o.delay || 0) + 0.3;
+      setTimeout(() => { try { g.disconnect(); lp?.disconnect(); pn?.disconnect(); } catch (e) { /* */ } }, life * 1000);
+      return true;
+    } catch (e) {
+      try { g?.disconnect(); lp?.disconnect(); pn?.disconnect(); } catch (er) { /* */ }
+      return false;
+    }
   }
 
   // ── continuous ─────────────────────────────────────────────────────────────
@@ -548,8 +602,7 @@ export function createAudio({ volume = 0.8, route = null } = {}) {
       set(L.bell.g.gain, ph < 0.12 ? 0.12 : 0.0, 0.01);
     } else set(L.bell.g.gain, 0, 0.05);
     // indicator: tick-tock while pulling in to a supply stop
-    const ns = snap.nearStop;
-    const autoInd = snap.phase === 'drive' && ns && ns.dist > -10 && ns.dist < 150 && !(snap.looted || []).includes(ns.id) && !snap.stop;
+    const autoInd = indicatorWanted(snap);
     const want = indicatorForce != null ? indicatorForce : !!autoInd;
     if (want) { indT += dt; if (indT >= 0.36) { indT -= 0.36; indOn = !indOn; play('tick', indOn); } } else { indT = 0.3; indOn = false; }
     if (snap.heat && typeof snap.heat.stars === 'number') lastStars = snap.heat.stars;
@@ -648,8 +701,21 @@ export function createAudio({ volume = 0.8, route = null } = {}) {
   return {
     update, event, horn, unlock, setMuted, setVolume, destroy, play, setDriveState, indicator, inspect,
     get muted() { return muted; },
-    get context() { return ctx; },
+    // R3-CAB: helpers for other modules (see the header). `context` used to be a getter (unused); it is now a function.
+    context: () => ctx,
+    get ctx() { return ctx; },
+    bus: () => sfxOut,
+    noise: () => noiseBuf,
+    registerSfx, sfx,
+    hasSfx: (name) => REG.has(name) || !!SFX[name],
+    get indicatorForced() { return indicatorForce; },
   };
+}
+
+/** R3-CAB: the automatic turn-signal rule (pulling in to a supply stop) — shared by the tick and the cab's stalk/lamp. */
+export function indicatorWanted(snap) {
+  const ns = snap && snap.nearStop;
+  return !!(snap && snap.phase === 'drive' && ns && ns.dist > -10 && ns.dist < 150 && !(snap.looted || []).includes(ns.id) && !snap.stop);
 }
 
 // fallback structure list (route.json `structures`) for car-wash / drawbridge proximity
